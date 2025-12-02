@@ -2,29 +2,57 @@ pipeline {
     agent any
     
     triggers {
-        githubPush()  // Auto-trigger on push
+        githubPush()
     }
     
     stages {
+        stage('Check Tools') {
+            steps {
+                echo '🔧 Checking installed tools...'
+                
+                script {
+                    // Check each tool and continue even if missing
+                    def tools = ['terraform', 'docker', 'gcloud', 'git', 'java']
+                    
+                    tools.each { tool ->
+                        try {
+                            sh "${tool} --version"
+                            echo "✅ ${tool.capitalize()} is installed"
+                        } catch (Exception e) {
+                            echo "⚠️  ${tool.capitalize()} is NOT installed"
+                        }
+                    }
+                }
+            }
+        }
+        
         stage('Hello CI/CD') {
             steps {
-                echo '��� Caprivax CI/CD Platform Pipeline'
+                echo '🚀 Caprivax CI/CD Platform Pipeline'
                 echo "Repository: ${env.GIT_URL}"
                 echo "Branch: ${env.GIT_BRANCH}"
-                sh 'terraform version'
-                sh 'gcloud version'
-                sh 'docker --version'
+                
+                // Use which to check if installed
+                sh '''
+                    echo "=== Tool Locations ==="
+                    which terraform || echo "terraform: Not installed"
+                    which docker || echo "docker: Not installed" 
+                    which gcloud || echo "gcloud: Not installed"
+                    which java || echo "java: Not installed"
+                    which git || echo "git: Not installed"
+                '''
             }
         }
         
         stage('Check Project Structure') {
             steps {
                 sh '''
-                    echo "Project Contents:"
+                    echo "=== Project Structure ==="
+                    pwd
                     ls -la
                     echo ""
-                    echo "Jenkins Infrastructure:"
-                    find jenkins-infrastructure -type f -name "*.tf" | head -5
+                    echo "=== Jenkins Infrastructure Files ==="
+                    find jenkins-infrastructure -type f -name "*.tf" | head -10 || echo "No .tf files found"
                 '''
             }
         }
@@ -36,6 +64,9 @@ pipeline {
         }
         failure {
             echo '❌ Pipeline failed. Check logs.'
+        }
+        always {
+            echo '📊 Pipeline execution completed.'
         }
     }
 }
