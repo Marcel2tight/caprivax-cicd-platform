@@ -1,72 +1,108 @@
 pipeline {
     agent any
-    
-    triggers {
-        githubPush()
+
+    // 1. Define Build Parameters
+    parameters {
+        choice(
+            name: 'ENVIRONMENT',
+            choices: ['dev', 'staging', 'prod'],
+            description: 'Select the environment to deploy to'
+        )
+        booleanParam(
+            name: 'AUTO_APPROVE',
+            defaultValue: false,
+            description: 'Check this to skip manual approval (Use with caution!)'
+        )
+        booleanParam(
+            name: 'DESTROY',
+            defaultValue: false,
+            description: 'Check this to DESTROY the infrastructure instead of applying'
+        )
     }
-    
+
+    environment {
+        // Points to the Credentials ID stored in Jenkins
+        GIT_CREDENTIALS_ID = 'github-credentials'
+        
+        // Dynamic directory path based on selection
+        TF_WORKING_DIR = "jenkins-infrastructure/environments/${params.ENVIRONMENT}"
+    }
+
     stages {
-        stage('Check Tools') {
+        stage('Checkout Code') {
             steps {
-                echo '🔧 Checking installed tools...'
-                
                 script {
-                    // Check each tool and continue even if missing
-                    def tools = ['terraform', 'docker', 'gcloud', 'git', 'java']
-                    
-                    tools.each { tool ->
-                        try {
-                            sh "${tool} --version"
-                            echo "✅ ${tool.capitalize()} is installed"
-                        } catch (Exception e) {
-                            echo "⚠️  ${tool.capitalize()} is NOT installed"
+                    echo "🚀 Starting deployment for environment: ${params.ENVIRONMENT}"
+                }
+                checkout scm
+            }
+        }
+
+        stage('Terraform Init') {
+            steps {
+                script {
+                    dir(TF_WORKING_DIR) {
+                        // Initialize the specific environment (loads correct backend)
+                        sh 'terraform init'
+                    }
+                }
+            }
+        }
+
+        stage('Terraform Plan') {
+            steps {
+                script {
+                    dir(TF_WORKING_DIR) {
+                        echo "📝 Planning changes for ${params.ENVIRONMENT}..."
+                        
+                        // Select the correct variables file automatically
+                        def varFile = "${params.ENVIRONMENT}.auto.tfvars"
+                        
+                        if (params.DESTROY) {
+                            sh "terraform plan -destroy -var-file=\"${varFile}\" -out=tfplan"
+                        } else {
+                            sh "terraform plan -var-file=\"${varFile}\" -out=tfplan"
                         }
                     }
                 }
             }
         }
-        
-        stage('Hello CI/CD') {
+
+        stage('Approval') {
+            when {
+                expression { return !params.AUTO_APPROVE }
+            }
             steps {
-                echo '🚀 Caprivax CI/CD Platform Pipeline'
-                echo "Repository: ${env.GIT_URL}"
-                echo "Branch: ${env.GIT_BRANCH}"
-                
-                // Use which to check if installed
-                sh '''
-                    echo "=== Tool Locations ==="
-                    which terraform || echo "terraform: Not installed"
-                    which docker || echo "docker: Not installed" 
-                    which gcloud || echo "gcloud: Not installed"
-                    which java || echo "java: Not installed"
-                    which git || echo "git: Not installed"
-                '''
+                script {
+                    def action = params.DESTROY ? "DESTROY" : "APPLY"
+                    input message: "Approve ${action} for ${params.ENVIRONMENT}?", ok: "Yes, Proceed"
+                }
             }
         }
-        
-        stage('Check Project Structure') {
+
+        stage('Terraform Apply / Destroy') {
             steps {
-                sh '''
-                    echo "=== Project Structure ==="
-                    pwd
-                    ls -la
-                    echo ""
-                    echo "=== Jenkins Infrastructure Files ==="
-                    find jenkins-infrastructure -type f -name "*.tf" | head -10 || echo "No .tf files found"
-                '''
+                script {
+                    dir(TF_WORKING_DIR) {
+                        if (params.DESTROY) {
+                            echo "💣 Destroying ${params.ENVIRONMENT} infrastructure..."
+                            sh 'terraform apply -destroy -auto-approve tfplan'
+                        } else {
+                            echo "🚀 Applying changes to ${params.ENVIRONMENT}..."
+                            sh 'terraform apply -auto-approve tfplan'
+                        }
+                    }
+                }
             }
         }
     }
-    
+
     post {
         success {
-            echo '✅ Pipeline succeeded! Ready for CI/CD workflows.'
+            echo "✅ Pipeline completed successfully for ${params.ENVIRONMENT}"
         }
         failure {
-            echo '❌ Pipeline failed. Check logs.'
-        }
-        always {
-            echo '📊 Pipeline execution completed.'
+            echo "❌ Pipeline failed for ${params.ENVIRONMENT}"
         }
     }
 }
