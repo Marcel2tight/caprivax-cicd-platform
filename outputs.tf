@@ -1,23 +1,21 @@
-output "project_info" {
-  description = "Project information"
-  value = {
-    project_id  = var.project_id
-    environment = var.environment
-    region      = var.region
-  }
+output "jenkins_external_ip" {
+  value     = module.jenkins_controller.external_ip
+  sensitive = true
+}
+
+output "jenkins_url" {
+  value = module.jenkins_controller.external_ip != null ? "http://${module.jenkins_controller.external_ip}:8080" : null
 }
 
 output "setup_instructions" {
-  description = "Initial setup instructions"
   value = <<-EOT
-  íº€ Caprivax CI/CD Platform - Basic Setup Complete!
+  íº€ Caprivax CI/CD Platform - Setup Complete!
   
-  Next Steps:
-  1. Review and customize environment configurations
-  2. Set up remote Git repository
-  3. Create Jenkins infrastructure modules
-  4. Deploy development environment
+  â–º Access Jenkins: ${module.jenkins_controller.external_ip != null ? "http://${module.jenkins_controller.external_ip}:8080" : "http://localhost:8080 (Requires IAP Tunnel)"}
   
-  Project Location: ~/OneDrive/Documents/Google-Cloud-Platform/Repositories/caprivax-cicd-platform
+  â–º SSH Command:    gcloud compute ssh capx-cicd-${var.environment}-controller --project=${var.project_id} --zone=${var.zone} ${module.jenkins_controller.external_ip == null ? "--tunnel-through-iap" : ""}
+  
+  Get Initial Password:
+  gcloud compute ssh capx-cicd-${var.environment}-controller --project=${var.project_id} --zone=${var.zone} ${module.jenkins_controller.external_ip == null ? "--tunnel-through-iap" : ""} --command="sudo cat /var/lib/jenkins/secrets/initialAdminPassword"
   EOT
 }
