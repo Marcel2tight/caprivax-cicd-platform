@@ -1,0 +1,14 @@
+variable "project_id" { type = string }
+variable "environment" { type = string }
+variable "naming_prefix" { type = string }
+variable "region" { type = string }
+variable "zone" { type = string }
+variable "machine_type" { type = string }
+variable "boot_disk_size" { type = number }
+variable "enable_public_ip" { type = bool }
+variable "enable_preemptible" { type = bool }
+variable "automatic_restart" { type = bool }
+variable "network_self_link" { type = string }
+variable "subnetwork_self_link" { type = string }
+variable "instance_tags" { type = list(string) }
+variable "service_account_email" { type = string }

@@ -1,0 +1,9 @@
+project_id             = "caprivax-dev-platform-infra"
+environment            = "dev"
+region                 = "us-central1"
+zone                   = "us-central1-a"
+vpc_cidr               = "10.200.10.0/24"
+jenkins_machine_type   = "e2-medium"
+enable_public_ip       = true
+enable_preemptible     = false
+automatic_restart      = true
