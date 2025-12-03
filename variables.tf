@@ -9,7 +9,7 @@ variable "jenkins_machine_type" { default = "e2-medium" }
 variable "jenkins_disk_size" { default = 50 }
 variable "enable_public_ip" { default = true }
 
-# CRITICAL FIXES - These must be declared in the root to accept values from dev.auto.tfvars
+# CRITICAL FIXES: These must be declared
 variable "enable_preemptible" { default = false }
 variable "automatic_restart" { default = true }
 
