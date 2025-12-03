@@ -1,4 +1,4 @@
-project_id             = "caprivax-stging-platform-infra" # Or "caprivax-dev-platform-infra" for testing
+project_id             = "caprivax-staging-platform-infra" # Or "caprivax-dev-platform-infra" for testing
 environment            = "staging"
 region                 = "us-central1"
 zone                   = "us-central1-b"
