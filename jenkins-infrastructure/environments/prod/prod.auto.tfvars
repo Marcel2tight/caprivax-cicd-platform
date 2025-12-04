@@ -4,6 +4,6 @@ region                 = "us-central1"
 zone                   = "us-central1-c"
 vpc_cidr               = "10.100.2.0/24"
 jenkins_machine_type   = "e2-standard-4"
-enable_public_ip       = false  # SECURE: No Public IP
+enable_public_ip       = false
 enable_preemptible     = false
 automatic_restart      = true
