@@ -1,4 +1,5 @@
 output "jenkins_external_ip" {
+  # This output references the module called 'jenkins_controller' defined in root/main.tf
   value     = module.jenkins_controller.external_ip
   sensitive = true
 }
