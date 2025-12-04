@@ -40,18 +40,18 @@ module "jenkins_iam" {
 # Controller Module
 module "jenkins_controller" {
   source = "../../modules/jenkins-controller"
-  
-  project_id          = var.project_id
-  environment         = var.environment
-  naming_prefix       = local.naming_prefix
-  region              = var.region
-  zone                = var.zone
-  machine_type        = var.jenkins_machine_type
-  boot_disk_size      = var.jenkins_disk_size
-  enable_public_ip    = var.enable_public_ip
-  enable_preemptible  = var.enable_preemptible
-  automatic_restart   = var.automatic_restart
-  
+
+  project_id         = var.project_id
+  environment        = var.environment
+  naming_prefix      = local.naming_prefix
+  region             = var.region
+  zone               = var.zone
+  machine_type       = var.jenkins_machine_type
+  boot_disk_size     = var.jenkins_disk_size
+  enable_public_ip   = var.enable_public_ip
+  enable_preemptible = var.enable_preemptible
+  automatic_restart  = var.automatic_restart
+
   network_self_link     = module.networking.vpc_self_link
   subnetwork_self_link  = module.networking.subnet_self_link
   service_account_email = module.jenkins_iam.jenkins_service_account_email
