@@ -1,5 +1,5 @@
 output "jenkins_external_ip" {
-  # This references the module defined *within* the root blueprint's main.tf
+  # Value derived from the module defined in THIS folder's main.tf
   value     = module.jenkins_controller.external_ip
   sensitive = true
 }
@@ -10,7 +10,7 @@ output "jenkins_url" {
 
 output "setup_instructions" {
   value = <<-EOT
-  íº€ Caprivax CI/CD Platform - Setup Complete!
+  ï¿½ï¿½ Caprivax CI/CD Platform - Setup Complete!
   
   â–º Access Jenkins: ${module.jenkins_controller.external_ip != null ? "http://${module.jenkins_controller.external_ip}:8080" : "http://localhost:8080 (Requires IAP Tunnel)"}
   

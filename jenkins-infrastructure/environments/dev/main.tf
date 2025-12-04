@@ -5,7 +5,7 @@ terraform {
   }
   backend "gcs" {
     bucket = "caprivax-tf-state"
-    prefix = "jenkins-cicd/dev"
+    prefix = "jenkins-cicd/staging"
   }
 }
 
@@ -14,6 +14,7 @@ provider "google" {
   region  = var.region
 }
 
+# The WORKING LOGIC (Moving wiring to the environment file)
 locals {
   naming_prefix = "capx-cicd-${var.environment}"
 }
@@ -46,6 +47,7 @@ module "jenkins_controller" {
   machine_type        = var.jenkins_machine_type
   boot_disk_size      = var.jenkins_disk_size
   enable_public_ip    = var.enable_public_ip
+  
   enable_preemptible  = var.enable_preemptible
   automatic_restart   = var.automatic_restart
   
