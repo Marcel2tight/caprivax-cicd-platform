@@ -14,9 +14,9 @@ provider "google" {
   region  = var.region
 }
 
-module "main_platform" {
+module "platform_wrapper" { # CORRECTED MODULE NAME
   source = "../../../"
-
+  
   project_id = var.project_id
   environment = var.environment
   region = var.region
