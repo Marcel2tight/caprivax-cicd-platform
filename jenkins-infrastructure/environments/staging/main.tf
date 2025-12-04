@@ -8,7 +8,11 @@ terraform {
     prefix = "jenkins-cicd/staging"
   }
 }
-provider "google" { project = var.project_id; region = var.region }
+
+provider "google" {
+  project = var.project_id
+  region  = var.region
+}
 
 module "main_platform" {
   source = "../../../"
