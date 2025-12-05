@@ -23,6 +23,19 @@ pipeline {
             }
         }
 
+        // NEW STAGE: Refresh State to fix msgpack/encoding errors
+        stage('Terraform Refresh') {
+            steps {
+                script {
+                    dir(TF_WORKING_DIR) {
+                        echo "í´„ Refreshing state to prevent encoding errors..."
+                        def varFile = "${params.ENVIRONMENT}.auto.tfvars"
+                        sh "terraform refresh -var-file=\"${varFile}\""
+                    }
+                }
+            }
+        }
+
         stage('Terraform Plan') {
             steps {
                 script {
