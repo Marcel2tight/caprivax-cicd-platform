@@ -59,13 +59,9 @@ module "monitoring" {
   source              = "../../modules/monitoring"
   project_id          = var.project_id
   naming_prefix       = local.naming_prefix
-  
-  # FIX: Added missing arguments here
-  environment         = var.environment
-  jenkins_zone        = var.zone
-  
   jenkins_instance_id = module.jenkins_controller.instance_id
   jenkins_external_ip = module.jenkins_controller.external_ip
+  notification_channels = [] # Pass empty list or actual channel IDs
 }
 
 module "monitoring_stack" {

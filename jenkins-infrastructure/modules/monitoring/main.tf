@@ -31,11 +31,6 @@ resource "google_monitoring_alert_policy" "high_cpu" {
   documentation {
     content = "Jenkins controller CPU utilization is above 80% for more than 1 minute. This may indicate high load or performance issues."
   }
-
-  labels = {
-    environment = var.environment
-    service     = "jenkins"
-  }
 }
 
 # Alert policy for disk space
@@ -68,11 +63,6 @@ resource "google_monitoring_alert_policy" "low_disk_space" {
 
   documentation {
     content = "Jenkins controller disk usage is above 85%. Consider cleaning up or increasing disk size."
-  }
-
-  labels = {
-    environment = var.environment
-    service     = "jenkins"
   }
 }
 
