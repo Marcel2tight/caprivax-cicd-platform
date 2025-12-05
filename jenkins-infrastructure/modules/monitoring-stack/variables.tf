@@ -1,0 +1,9 @@
+variable "project_id" {}
+variable "environment" {}
+variable "naming_prefix" {}
+variable "region" {}
+variable "zone" {}
+variable "network_self_link" {}
+variable "subnetwork_self_link" {}
+variable "jenkins_internal_ip" {}
+variable "service_account_email" {}

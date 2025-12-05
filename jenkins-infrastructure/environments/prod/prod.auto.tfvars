@@ -1,4 +1,4 @@
-project_id             = "caprivax-prod-platform-infra" # Ensure this project exists!
+project_id             = "caprivax-prod-platform-infra"
 environment            = "prod"
 region                 = "us-central1"
 zone                   = "us-central1-c"

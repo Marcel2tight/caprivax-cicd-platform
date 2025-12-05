@@ -38,3 +38,16 @@ resource "google_compute_firewall" "allow_jenkins_web" {
   source_ranges = var.allowed_web_ips
   target_tags   = ["jenkins-web"]
 }
+
+# NEW: Allow Monitoring Stack (3000/9090)
+resource "google_compute_firewall" "allow_monitoring" {
+  name    = "${var.naming_prefix}-allow-monitoring"
+  network = google_compute_network.jenkins_vpc.name
+  project = var.project_id
+  allow {
+    protocol = "tcp"
+    ports    = ["9090", "3000"]
+  }
+  source_ranges = var.allowed_web_ips
+  target_tags   = ["monitoring-stack"]
+}
