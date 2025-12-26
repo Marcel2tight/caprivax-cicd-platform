@@ -1,77 +1,40 @@
-# ��� Caprivax CI/CD Platform
+# 🏗️ Caprivax Enterprise Platform Infrastructure
+### **GCP Multi-Environment Orchestration with Terraform & Zero-Trust Security**
 
-[![Terraform](https://img.shields.io/badge/terraform-%235835CC.svg?style=for-the-badge&logo=terraform&logoColor=white)](https://www.terraform.io/)
-[![Google Cloud](https://img.shields.io/badge/GoogleCloud-%234285F4.svg?style=for-the-badge&logo=google-cloud&logoColor=white)](https://cloud.google.com/)
-[![Jenkins](https://img.shields.io/badge/jenkins-%232C5263.svg?style=for-the-badge&logo=jenkins&logoColor=white)](https://www.jenkins.io/)
+## 📖 Overview
+This project implements a production-grade, multi-tenant infrastructure on Google Cloud Platform (GCP). It utilizes a **Decoupled Modular Architecture** to manage Development, Staging, and Production environments with strict **Zero-Trust** security principles.
 
-Enterprise-grade Jenkins CI/CD platform for automated Terraform infrastructure deployment across multiple environments.
 
-## ��� Project Structure
-```
-caprivax-cicd-platform/
-├── jenkins-infrastructure/     # Jenkins platform Terraform
-├── terraform-pipelines/        # Pipeline definitions
-├── scripts/                    # Automation scripts
-├── config/                     # Configuration files
-├── modules/                    # Reusable Terraform modules
-└── docs/                       # Documentation
-```
 
-## ��� Environments
+## 🛠️ Key Technical Features
+* **Modular Design:** Reusable `standard-vm` child module for consistent deployments.
+* **Zero-Trust Connectivity:** Complete removal of Public IPs in Staging/Prod; management via **Identity-Aware Proxy (IAP)**.
+* **Outbound Governance:** **Cloud NAT** gateways for private instances to perform secure updates/patching.
+* **State Management:** Remote state storage in **GCS** with **Terraform Workspaces** for environment isolation.
+* **FinOps Integration:** Automated resource labeling for granular cost tracking.
 
-| Environment | Project ID | Status |
-|-------------|------------|---------|
-| Development | `caprivax-dev-cicd-platform` | ✅ Configured |
-| Staging | `caprivax-staging-cicd-platform` | ✅ Configured |
-| Production | `caprivax-prod-cicd-platform` | ✅ Configured |
+---
 
-## ��� Quick Start
+## 📂 Project Structure
+```text
+capx-platform-infrastructure/
+├── Modules/
+│   └── standard-vm/            # The Blueprint (Compute, IAP Firewalls, Startup Logic)
+├── Root-module/                # The Orchestrator (Environment Composition)
+│   ├── dev.auto.tfvars         # Cost-optimized (Spot instances, Public IP)
+│   ├── staging.auto.tfvars     # Pre-prod validation (Private IP, Cloud NAT)
+│   └── prod.auto.tfvars        # Zero-Trust hardened (Private IP, High-Availability)
+🚀 Deployment Runbook1. Initialize Project APIsAPI enablement is project-scoped. Run this to ensure IAP and Compute services are ready:BashPROJECTS=("caprivax-dev-platform-infra" "caprivax-stging-platform-infra" "caprivax-prod-platform-infra")
+for PROJECT in "${PROJECTS[@]}"; do
+  gcloud services enable compute.googleapis.com iap.googleapis.com --project=$PROJECT
+done
+2. Environment Lifecycle (Using Workspaces)Bashcd Root-module
+terraform workspace select staging || terraform workspace new staging
+terraform plan -var-file="staging.auto.tfvars" -out=staging.tfplan
+terraform apply "staging.tfplan"
+3. Secure Service Verification (IAP Tunneling)Since instances are private, use an IAP TCP tunnel to verify services like Nginx:Bash# Terminal 1: Open the Tunnel
+gcloud compute start-iap-tunnel [VM_NAME] 80 --local-host-port=localhost:8080
 
-```bash
-# Clone this repository
-git clone https://github.com/Marcel2tight/caprivax-cicd-platform.git
-cd caprivax-cicd-platform
-
-# Initialize project
-./scripts/setup/init-project.sh
-
-# Verify project structure
-./scripts/setup/verify-project.sh
-
-# Deploy development environment
-cd jenkins-infrastructure/environments/dev
-terraform init
-terraform plan -var-file="dev.auto.tfvars"
-terraform apply -var-file="dev.auto.tfvars"
-```
-
-## ��� Prerequisites
-
-- Google Cloud Platform account
-- gcloud CLI installed and configured
-- Terraform 1.5.0+
-- GitHub account (for CI/CD)
-
-## ���️ Architecture
-
-- **Jenkins Controller**: CI/CD orchestration
-- **GCP Infrastructure**: Secure networking & IAM
-- **Terraform Pipelines**: Automated deployments
-- **Multi-environment**: Dev, Staging, Production
-
-## ��� Contributing
-
-1. Fork this repository
-2. Create a feature branch: `git checkout -b feature/amazing-feature`
-3. Commit changes: `git commit -m 'Add amazing feature'`
-4. Push to branch: `git push origin feature/amazing-feature`
-5. Open a Pull Request
-
-## ��� License
-
-This project is licensed under the MIT License - see the [LICENSE](LICENSE) file for details.
-
-## ��� Support
-
-- [Setup Guide](docs/setup/SETUP_GUIDE.md)
-- [Troubleshooting](docs/troubleshooting/TROUBLESHOOTING.md)
+# Terminal 2: Test the Service
+curl -I http://localhost:8080
+🛡️ Zero-Trust Security MatrixFeatureDevelopmentStagingProductionPublic IPEnabled (Speed)DisabledDisabledInbound AccessDirect SSH / IAPIAP OnlyIAP OnlyOutbound AccessDirect IGWCloud NATCloud NATAttack SurfaceExposedHiddenHidden♻️ Decommissioning ProtocolTo prevent orphaned resources and billing leaks, destroy in Reverse Promotion Order:Production: terraform workspace select prod && terraform destroy -var-file="prod.auto.tfvars"Staging: terraform workspace select staging && terraform destroy -var-file="staging.auto.tfvars"Development: terraform workspace select dev && terraform destroy -var-file="dev.auto.tfvars"
