@@ -1,15 +1,58 @@
 terraform {
-  backend "gcs" { bucket = "caprivax-tf-state"; prefix = "jenkins/staging" }
+  backend "gcs" {
+    bucket = "caprivax-tf-state"
+    prefix = "jenkins/staging"
+  }
 }
-provider "google" { project = var.project_id; region = var.region }
 
-module "sa" { source = "../../modules/service-accounts"; project_id = var.project_id; environment = "stg"; service_account_id = "capx-stg-sa" }
-module "net" { source = "../../modules/networking"; project_id = var.project_id; naming_prefix = "capx-stg"; region = var.region; subnet_cidr = "10.20.0.0/24"; environment = "stg" }
-module "jenkins" {
-  source = "../../modules/jenkins-controller"
-  project_id = var.project_id; naming_prefix = "capx-stg"; zone = "${var.region}-b"
-  network_link = module.net.vpc_link; subnetwork_link = module.net.subnet_link; public_ip = true
-  machine_type = "e2-standard-2"; source_image = "debian-cloud/debian-11"; service_account_email = module.sa.email
+provider "google" {
+  project = var.project_id
+  region  = var.region
 }
-# Staging also gets the monitoring stack
-module "mon" { source = "../../modules/monitoring-stack"; project_id = var.project_id; naming_prefix = "capx-stg"; zone = "${var.region}-b"; network_link = module.net.vpc_link; subnetwork_link = module.net.subnet_link; jenkins_ip = module.jenkins.internal_ip; service_account_email = module.sa.email }
+
+# 1. Foundation: Networking (Restricted SSH)
+module "net" {
+  source             = "../../modules/networking"
+  project_id         = var.project_id
+  naming_prefix      = "capx-stg"
+  region             = var.region
+  subnet_cidr        = "10.20.0.0/24"
+  environment        = "stg"
+  allowed_web_ranges = ["0.0.0.0/0"]
+  # Only allow Google IAP to reach Port 22
+  allowed_ssh_ranges = ["35.235.240.0/20"] 
+}
+
+# 2. Identity: Service Accounts
+module "sa" {
+  source             = "../../modules/service-accounts"
+  project_id         = var.project_id
+  environment        = "stg"
+  service_account_id = "capx-stg-sa"
+}
+
+# 3. Core: Jenkins Controller
+module "jenkins" {
+  source                = "../../modules/jenkins-controller"
+  project_id            = var.project_id
+  naming_prefix         = "capx-stg"
+  zone                  = "${var.region}-b"
+  machine_type          = "e2-standard-2"
+  network_link          = module.net.vpc_link
+  subnetwork_link       = module.net.subnet_link
+  public_ip             = true  # External IP for UI, but SSH is blocked by Firewall
+  source_image          = "debian-cloud/debian-11"
+  service_account_email = module.sa.email
+}
+
+# 4. Observability: Monitoring
+module "mon" {
+  source                = "../../modules/monitoring-stack"
+  project_id            = var.project_id
+  naming_prefix         = "capx-stg"
+  zone                  = "${var.region}-b"
+  network_link          = module.net.vpc_link
+  subnetwork_link       = module.net.subnet_link
+  jenkins_ip            = module.jenkins.internal_ip
+  service_account_email = module.sa.email
+}

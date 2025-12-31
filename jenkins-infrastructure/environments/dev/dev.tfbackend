@@ -1,0 +1,2 @@
+bucket = "caprivax-tf-state"
+prefix = "jenkins/dev"

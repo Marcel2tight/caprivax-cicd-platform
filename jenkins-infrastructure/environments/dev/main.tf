@@ -1,8 +1,16 @@
 terraform {
-  backend "gcs" {
-    bucket = "caprivax-tf-state"
-    prefix = "jenkins/dev"
+  required_version = ">= 1.5.0"
+  required_providers {
+    google = {
+      source  = "hashicorp/google"
+      version = ">= 5.0" # Changed to >= to accommodate your v7.14 installation
+    }
+    random = {
+      source  = "hashicorp/random"
+      version = "~> 3.0"
+    }
   }
+  backend "gcs" {}
 }
 
 provider "google" {
@@ -10,7 +18,19 @@ provider "google" {
   region  = var.region
 }
 
-# Service Account Management
+# 1. Foundation: Networking
+module "net" {
+  source             = "../../modules/networking"
+  project_id         = var.project_id
+  naming_prefix      = var.naming_prefix
+  region             = var.region
+  subnet_cidr        = "10.10.0.0/24"
+  environment        = "dev"
+  allowed_web_ranges = ["0.0.0.0/0"]
+  allowed_ssh_ranges = ["0.0.0.0/0"] 
+}
+
+# 2. Identity: Service Accounts
 module "sa" {
   source             = "../../modules/service-accounts"
   project_id         = var.project_id
@@ -18,21 +38,22 @@ module "sa" {
   service_account_id = "capx-dev-sa"
 }
 
-# Network Infrastructure (Dev CIDR)
-module "net" {
-  source         = "../../modules/networking"
-  project_id     = var.project_id
-  naming_prefix  = "capx-dev"
-  region         = var.region
-  subnet_cidr    = "10.10.0.0/24"
-  environment    = "dev"
+# 3. Access: Bastion Host
+module "bastion" {
+  source                = "../../modules/bastion"
+  project_id            = var.project_id
+  naming_prefix         = var.naming_prefix
+  zone                  = "${var.region}-a"
+  network_link          = module.net.vpc_link
+  subnetwork_link       = module.net.subnet_link
+  service_account_email = module.sa.email
 }
 
-# Jenkins Controller (Cost-Optimized for Dev)
+# 4. Core: Jenkins Controller
 module "jenkins" {
   source                = "../../modules/jenkins-controller"
   project_id            = var.project_id
-  naming_prefix         = "capx-dev"
+  naming_prefix         = var.naming_prefix
   zone                  = "${var.region}-a"
   machine_type          = "e2-medium"
   network_link          = module.net.vpc_link
@@ -42,11 +63,11 @@ module "jenkins" {
   service_account_email = module.sa.email
 }
 
-# Monitoring Stack
+# 5. Observability: Monitoring
 module "mon" {
   source                = "../../modules/monitoring-stack"
   project_id            = var.project_id
-  naming_prefix         = "capx-dev"
+  naming_prefix         = var.naming_prefix
   zone                  = "${var.region}-a"
   network_link          = module.net.vpc_link
   subnetwork_link       = module.net.subnet_link
