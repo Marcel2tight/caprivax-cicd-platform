@@ -10,8 +10,11 @@ terraform {
       version = "~> 3.0"
     }
   }
-  backend "gcs" {}
-}
+   backend "gcs" {
+    bucket = "caprivax-tf-state"  
+    prefix = "terraform/state"           # Optional: Folder path within bucket
+  }
+ }
 
 provider "google" {
   project = var.project_id

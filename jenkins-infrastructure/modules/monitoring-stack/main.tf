@@ -6,11 +6,10 @@ resource "random_password" "grafana_admin" {
 
 # Store the password in Secret Manager for safe retrieval
 resource "google_secret_manager_secret" "grafana_pw" {
-  project   = var.project_id
-  secret_id = "${var.naming_prefix}-grafana-password"
+  secret_id = "grafana-admin-password"
 
   replication {
-    auto {} # Modern syntax for automatic replication
+    auto {}
   }
 }
 
