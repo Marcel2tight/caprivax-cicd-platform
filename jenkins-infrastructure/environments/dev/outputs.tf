@@ -4,6 +4,7 @@ output "monitor_ip" {
 }
 
 output "bastion_ip" {
+  # This must match the output name defined in the bastion module above
   value       = module.bastion.public_ip
   description = "The public IP of the Bastion host"
 }
