@@ -1,8 +1,13 @@
 terraform {
-  backend "gcs" {
-    bucket = "caprivax-tf-state"
-    prefix = "jenkins/prod"
+  required_version = ">= 1.5.0"
+  required_providers {
+    google = {
+      source  = "hashicorp/google"
+      version = ">= 5.0"
+    }
   }
+  # Empty backend for dynamic Jenkins injection
+  backend "gcs" {}
 }
 
 provider "google" {
@@ -42,7 +47,7 @@ module "bastion" {
   service_account_email = module.sa.email
 }
 
-# 4. Core: Jenkins Controller (Private Only)
+# 4. Core: Jenkins Controller (Private Only - Zero Trust)
 module "jenkins" {
   source                = "../../modules/jenkins-controller"
   project_id            = var.project_id
@@ -51,7 +56,7 @@ module "jenkins" {
   machine_type          = "e2-standard-4"
   network_link          = module.net.vpc_link
   subnetwork_link       = module.net.subnet_link
-  public_ip             = false # No external IP - Zero Trust
+  public_ip             = false 
   source_image          = "debian-cloud/debian-11"
   service_account_email = module.sa.email
 }

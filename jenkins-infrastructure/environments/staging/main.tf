@@ -1,8 +1,13 @@
 terraform {
-  backend "gcs" {
-    bucket = "caprivax-tf-state"
-    prefix = "jenkins/staging"
+  required_version = ">= 1.5.0"
+  required_providers {
+    google = {
+      source  = "hashicorp/google"
+      version = ">= 5.0"
+    }
   }
+  # Empty backend for Jenkins injection
+  backend "gcs" {}
 }
 
 provider "google" {
@@ -19,7 +24,6 @@ module "net" {
   subnet_cidr        = "10.20.0.0/24"
   environment        = "stg"
   allowed_web_ranges = ["0.0.0.0/0"]
-  # Only allow Google IAP to reach Port 22
   allowed_ssh_ranges = ["35.235.240.0/20"] 
 }
 
@@ -40,7 +44,7 @@ module "jenkins" {
   machine_type          = "e2-standard-2"
   network_link          = module.net.vpc_link
   subnetwork_link       = module.net.subnet_link
-  public_ip             = true  # External IP for UI, but SSH is blocked by Firewall
+  public_ip             = true
   source_image          = "debian-cloud/debian-11"
   service_account_email = module.sa.email
 }
