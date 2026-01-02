@@ -1,16 +1,18 @@
-# Generate a random password for Grafana Admin
+# 1. Generate a password WITHOUT characters that break shell/YAML ($ and /)
 resource "random_password" "grafana_admin" {
-  length  = 16
-  special = true
+  length           = 16
+  special          = true
+  # Explicitly excluding '$' to prevent Docker Compose interpolation errors
+  override_special = "!#%&*()-_=+[]{}<>:?" 
 }
 
-# Store the password in Secret Manager for safe retrieval
+# 2. Store the password in Secret Manager
 resource "google_secret_manager_secret" "grafana_pw" {
   project   = var.project_id
   secret_id = "${var.naming_prefix}-grafana-password"
 
   replication {
-    auto {} # Modern syntax for automatic replication
+    auto {}
   }
 }
 
@@ -19,7 +21,7 @@ resource "google_secret_manager_secret_version" "v1" {
   secret_data = random_password.grafana_admin.result
 }
 
-# Monitoring Instance (Prometheus & Grafana)
+# 3. Monitoring Instance
 resource "google_compute_instance" "monitor" {
   name         = "${var.naming_prefix}-monitor"
   machine_type = "e2-medium"
@@ -37,12 +39,9 @@ resource "google_compute_instance" "monitor" {
   network_interface {
     network    = var.network_link
     subnetwork = var.subnetwork_link
-    access_config {
-      # Public IP for accessing Grafana dashboards
-    }
+    access_config {}
   }
 
-  # Necessary for accessing other GCP APIs if needed
   service_account {
     email  = var.service_account_email
     scopes = ["cloud-platform"]
@@ -51,15 +50,13 @@ resource "google_compute_instance" "monitor" {
   metadata_startup_script = <<-SCRIPT
     #!/bin/bash
     set -e
-    
-    # Install Docker and Docker Compose
     apt-get update
     apt-get install -y docker.io docker-compose
     
     mkdir -p /opt/mon/provisioning/datasources
     cd /opt/mon
 
-    # Configure Prometheus to scrape Jenkins
+    # Prometheus Config
     cat > prometheus.yml <<P_EOF
 scrape_configs:
   - job_name: 'jenkins'
@@ -68,7 +65,7 @@ scrape_configs:
       - targets: ['${var.jenkins_ip}:8080']
 P_EOF
 
-    # Auto-provision Prometheus as a data source in Grafana
+    # Grafana Datasource Config
     cat > provisioning/datasources/ds.yml <<G_EOF
 apiVersion: 1
 datasources:
@@ -78,7 +75,8 @@ datasources:
     isDefault: true
 G_EOF
 
-    # Define the stack
+    # Docker Compose Stack
+    # Using single quotes around the password for shell safety
     cat > docker-compose.yml <<D_EOF
 version: '3'
 services:
@@ -99,7 +97,7 @@ services:
     ports:
       - "3000:3000"
     environment:
-      - GF_SECURITY_ADMIN_PASSWORD=${random_password.grafana_admin.result}
+      - 'GF_SECURITY_ADMIN_PASSWORD=${random_password.grafana_admin.result}'
     restart: always
 D_EOF
 
@@ -107,7 +105,7 @@ D_EOF
   SCRIPT
 }
 
-# Ensure the firewall rule exists to allow access to UI ports
+# 4. Firewall Rule
 resource "google_compute_firewall" "monitoring_ui" {
   name    = "${var.naming_prefix}-allow-monitoring-ui"
   network = var.network_link
