@@ -14,6 +14,11 @@ resource "google_compute_instance" "bastion" {
   network_interface {
     network    = var.network_link
     subnetwork = var.subnetwork_link
+
+    # THIS IS THE FIX:
+    access_config {
+      // Ephemeral public IP
+    }
   }
 
   metadata = {
@@ -31,7 +36,6 @@ resource "google_compute_firewall" "allow_iap" {
     ports    = ["22"]
   }
 
-  # Official Google IAP netblock for secure tunneling
   source_ranges = ["35.235.240.0/20"]
   target_tags   = ["bastion-host"]
 }
