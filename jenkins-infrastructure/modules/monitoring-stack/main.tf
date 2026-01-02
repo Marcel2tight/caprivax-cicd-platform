@@ -6,10 +6,11 @@ resource "random_password" "grafana_admin" {
 
 # Store the password in Secret Manager for safe retrieval
 resource "google_secret_manager_secret" "grafana_pw" {
-  secret_id = "grafana-admin-password"
+  project   = var.project_id
+  secret_id = "${var.naming_prefix}-grafana-password"
 
   replication {
-    auto {}
+    auto {} # Modern syntax for automatic replication
   }
 }
 
@@ -24,6 +25,7 @@ resource "google_compute_instance" "monitor" {
   machine_type = "e2-medium"
   zone         = var.zone
   project      = var.project_id
+  tags         = ["monitoring-stack"]
 
   boot_disk {
     initialize_params {
@@ -40,6 +42,7 @@ resource "google_compute_instance" "monitor" {
     }
   }
 
+  # Necessary for accessing other GCP APIs if needed
   service_account {
     email  = var.service_account_email
     scopes = ["cloud-platform"]
@@ -81,6 +84,7 @@ version: '3'
 services:
   prometheus:
     image: prom/prometheus
+    container_name: prometheus
     volumes:
       - ./prometheus.yml:/etc/prometheus/prometheus.yml
     ports:
@@ -89,6 +93,7 @@ services:
 
   grafana:
     image: grafana/grafana
+    container_name: grafana
     volumes:
       - ./provisioning:/etc/grafana/provisioning
     ports:
@@ -100,4 +105,19 @@ D_EOF
 
     docker-compose up -d
   SCRIPT
+}
+
+# Ensure the firewall rule exists to allow access to UI ports
+resource "google_compute_firewall" "monitoring_ui" {
+  name    = "${var.naming_prefix}-allow-monitoring-ui"
+  network = var.network_link
+  project = var.project_id
+
+  allow {
+    protocol = "tcp"
+    ports    = ["3000", "9090"]
+  }
+
+  source_ranges = ["0.0.0.0/0"]
+  target_tags   = ["monitoring-stack"]
 }
