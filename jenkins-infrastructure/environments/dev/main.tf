@@ -3,18 +3,15 @@ terraform {
   required_providers {
     google = {
       source  = "hashicorp/google"
-      version = ">= 5.0" # Changed to >= to accommodate your v7.14 installation
+      version = ">= 5.0"
     }
     random = {
       source  = "hashicorp/random"
       version = "~> 3.0"
     }
   }
-   backend "gcs" {
-    bucket = "caprivax-tf-state"  
-    prefix = "terraform/state"           # Optional: Folder path within bucket
-  }
- }
+  backend "gcs" {}
+}
 
 provider "google" {
   project = var.project_id
@@ -60,6 +57,8 @@ module "mon" {
   zone                  = "${var.region}-a"
   network_link          = module.net.vpc_link
   subnetwork_link       = module.net.subnet_link
-  jenkins_ip            = module.jenkins.internal_ip
   service_account_email = module.sa.email
+  
+  # Pointing to your existing Jenkins Manager
+  jenkins_ip            = "10.128.0.6" 
 }
