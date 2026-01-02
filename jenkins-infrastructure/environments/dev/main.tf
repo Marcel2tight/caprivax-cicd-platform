@@ -52,21 +52,7 @@ module "bastion" {
   service_account_email = module.sa.email
 }
 
-# 4. Core: Jenkins Controller
-module "jenkins" {
-  source                = "../../modules/jenkins-controller"
-  project_id            = var.project_id
-  naming_prefix         = var.naming_prefix
-  zone                  = "${var.region}-a"
-  machine_type          = "e2-medium"
-  network_link          = module.net.vpc_link
-  subnetwork_link       = module.net.subnet_link
-  public_ip             = true
-  source_image          = "debian-cloud/debian-11"
-  service_account_email = module.sa.email
-}
-
-# 5. Observability: Monitoring
+# 4. Observability: Monitoring
 module "mon" {
   source                = "../../modules/monitoring-stack"
   project_id            = var.project_id

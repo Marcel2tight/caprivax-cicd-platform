@@ -30,3 +30,6 @@ includedPermissions:
   - storage.objects.delete
   - storage.objects.get
   - storage.objects.list
+  - iam.serviceAccounts.create
+  - iam.serviceAccounts.delete
+  - resourcemanager.projects.setIamPolicy
