@@ -15,7 +15,18 @@ pipeline {
     stages {
         stage('Checkout & Sync') {
             steps {
-                checkout scm
+                checkout([
+                    $class: 'GitSCM',
+                    branches: [[name: '*/main']],
+                    extensions: [
+                        // Clean before checkout
+                        [$class: 'CleanBeforeCheckout'],
+                        // Clone all branches and tags
+                        [$class: 'CloneOption', depth: 0, noTags: false, reference: '', shallow: false]
+                    ],
+                    userRemoteConfigs: [[url: 'https://github.com/your-org/your-repo.git']]
+                ])
+                
                 script {
                     if (params.ROLLBACK_COMMIT != '') {
                         sh "git checkout ${params.ROLLBACK_COMMIT}"
@@ -24,20 +35,41 @@ pipeline {
                         env.GIT_AUTHOR = sh(script: "git log -1 --pretty=format:'%an'", returnStdout: true).trim()
                     }
                     
-                    // DEBUG: Print complete workspace structure
+                    // DEBUG: Print complete repository structure
                     sh """
-                        echo "=== WORKSPACE STRUCTURE DEBUG ==="
+                        echo "=== FULL REPOSITORY STRUCTURE ==="
                         echo "Workspace: ${env.WORKSPACE}"
                         echo "Current directory:"
                         pwd
-                        echo "Listing all directories:"
-                        find . -type d -name "modules" | head -10
-                        echo "Looking for module directories:"
-                        find . -type d -name "networking" -o -name "service-accounts" -o -name "jenkins-controller" -o -name "monitoring-stack" | head -20
-                        echo "Checking specific paths:"
-                        ls -la modules/ 2>/dev/null || echo "No modules/ at root"
-                        ls -la jenkins-infrastructure/ 2>/dev/null || echo "No jenkins-infrastructure/ directory"
-                        ls -la jenkins-infrastructure/modules/ 2>/dev/null || echo "No jenkins-infrastructure/modules/"
+                        echo "Complete tree (first 50 lines):"
+                        find . -type f -name "*.tf" | sort | head -50
+                        echo ""
+                        echo "=== CHECKING MODULES DIRECTORIES ==="
+                        echo "Looking for modules at: ${env.WORKSPACE}/jenkins-infrastructure/modules/"
+                        if [ -d "${env.WORKSPACE}/jenkins-infrastructure/modules/" ]; then
+                            echo "✓ Found jenkins-infrastructure/modules/"
+                            ls -la "${env.WORKSPACE}/jenkins-infrastructure/modules/"
+                        else
+                            echo "✗ NOT FOUND: jenkins-infrastructure/modules/"
+                        fi
+                        echo ""
+                        echo "Looking for modules at: ${env.WORKSPACE}/modules/"
+                        if [ -d "${env.WORKSPACE}/modules/" ]; then
+                            echo "✓ Found modules/"
+                            ls -la "${env.WORKSPACE}/modules/"
+                        else
+                            echo "✗ NOT FOUND: modules/"
+                        fi
+                        echo ""
+                        echo "=== SEARCHING FOR SPECIFIC MODULES ==="
+                        echo "Searching for 'jenkins-controller' directory:"
+                        find . -type d -name "jenkins-controller" 2>/dev/null
+                        echo ""
+                        echo "Searching for 'networking' directory:"
+                        find . -type d -name "networking" 2>/dev/null
+                        echo ""
+                        echo "=== LISTING ALL .tf FILES ==="
+                        find . -type f -name "*.tf" | head -30
                     """
                 }
             }
@@ -47,46 +79,46 @@ pipeline {
             steps {
                 withCredentials([file(credentialsId: 'gcp-dev-sa-key', variable: 'GOOGLE_APPLICATION_CREDENTIALS')]) {
                     script {
-                        // First, find where modules actually are
+                        // Find the actual module directories
+                        def jenkinsModulePath = sh(script: """
+                            find "${env.WORKSPACE}" -type d -name "jenkins-controller" | head -1
+                        """, returnStdout: true).trim()
+                        
+                        def networkingModulePath = sh(script: """
+                            find "${env.WORKSPACE}" -type d -name "networking" | head -1
+                        """, returnStdout: true).trim()
+                        
+                        def saModulePath = sh(script: """
+                            find "${env.WORKSPACE}" -type d -name "service-accounts" | head -1
+                        """, returnStdout: true).trim()
+                        
+                        def monitoringModulePath = sh(script: """
+                            find "${env.WORKSPACE}" -type d -name "monitoring-stack" | head -1
+                        """, returnStdout: true).trim()
+                        
+                        echo "Found modules at:"
+                        echo "- Jenkins: ${jenkinsModulePath}"
+                        echo "- Networking: ${networkingModulePath}"
+                        echo "- Service Accounts: ${saModulePath}"
+                        echo "- Monitoring: ${monitoringModulePath}"
+                        
+                        // Get the common parent directory for modules
                         def modulesDir = sh(script: """
-                            # Look for modules directory
-                            if [ -d "modules" ]; then
-                                echo "${env.WORKSPACE}/modules"
-                            elif [ -d "jenkins-infrastructure/modules" ]; then
-                                echo "${env.WORKSPACE}/jenkins-infrastructure/modules"
-                            elif [ -d "infrastructure/modules" ]; then
-                                echo "${env.WORKSPACE}/infrastructure/modules"
-                            else
-                                # Try to find any modules directory
-                                find "${env.WORKSPACE}" -type d -name "modules" | head -1
-                            fi
+                            # Find common parent
+                            dirs="${jenkinsModulePath} ${networkingModulePath} ${saModulePath} ${monitoringModulePath}"
+                            echo "\$dirs" | tr ' ' '\\n' | xargs -I {} dirname {} | sort | uniq -c | sort -rn | head -1 | awk '{print \$2}'
                         """, returnStdout: true).trim()
                         
                         if (!modulesDir) {
-                            error "❌ No modules directory found in the repository!"
+                            modulesDir = "${env.WORKSPACE}/modules"
                         }
                         
-                        echo "✅ Found modules at: ${modulesDir}"
-                        
-                        // Verify each module exists
-                        def requiredModules = ['networking', 'service-accounts', 'jenkins-controller', 'monitoring-stack']
-                        requiredModules.each { module ->
-                            def modulePath = "${modulesDir}/${module}"
-                            if (!fileExists(modulePath)) {
-                                echo "⚠️ Warning: Module ${module} not found at ${modulePath}"
-                                // Try to find it anywhere
-                                def foundPath = sh(script: "find ${env.WORKSPACE} -type d -name '${module}' | head -1", returnStdout: true).trim()
-                                if (foundPath) {
-                                    echo "   Found at alternative location: ${foundPath}"
-                                }
-                            } else {
-                                echo "✓ Module ${module} found at ${modulePath}"
-                            }
-                        }
+                        echo "Using modules directory: ${modulesDir}"
                         
                         dir(TF_PATH) {
-                            echo "--- 🛠️ Generating main.tf with modules from: ${modulesDir} ---"
+                            echo "--- 🛠️ Generating main.tf ---"
                             
+                            // Use the actual found paths for each module
                             sh """
                             cat <<'EOF' > main.tf
                             terraform {
@@ -101,9 +133,15 @@ pipeline {
                               project = var.project_id
                               region  = var.region
                             }
-
+EOF
+                            """
+                            
+                            // Add modules with their actual paths
+                            if (networkingModulePath) {
+                                sh """
+                                cat <<'EOF' >> main.tf
                             module "net" {
-                              source             = "${modulesDir}/networking"
+                              source             = "${networkingModulePath}"
                               project_id         = var.project_id
                               naming_prefix      = "capx-${params.ENVIRONMENT}"
                               region             = var.region
@@ -112,16 +150,28 @@ pipeline {
                               allowed_web_ranges = ["0.0.0.0/0"]
                               allowed_ssh_ranges = ["35.235.240.0/20"] 
                             }
-
+EOF
+                                """
+                            }
+                            
+                            if (saModulePath) {
+                                sh """
+                                cat <<'EOF' >> main.tf
                             module "sa" {
-                              source             = "${modulesDir}/service-accounts"
+                              source             = "${saModulePath}"
                               project_id         = var.project_id
                               environment        = "${params.ENVIRONMENT}"
                               service_account_id = "capx-${params.ENVIRONMENT}-sa"
                             }
-
+EOF
+                                """
+                            }
+                            
+                            if (jenkinsModulePath) {
+                                sh """
+                                cat <<'EOF' >> main.tf
                             module "jenkins" {
-                              source                = "${modulesDir}/jenkins-controller"
+                              source                = "${jenkinsModulePath}"
                               project_id            = var.project_id
                               naming_prefix         = "capx-${params.ENVIRONMENT}"
                               zone                  = "\${var.region}-b"
@@ -132,9 +182,15 @@ pipeline {
                               source_image          = "debian-cloud/debian-11"
                               service_account_email = module.sa.email
                             }
-
+EOF
+                                """
+                            }
+                            
+                            if (monitoringModulePath) {
+                                sh """
+                                cat <<'EOF' >> main.tf
                             module "mon" {
-                              source                = "${modulesDir}/monitoring-stack"
+                              source                = "${monitoringModulePath}"
                               project_id            = var.project_id
                               naming_prefix         = "capx-${params.ENVIRONMENT}"
                               zone                  = "\${var.region}-b"
@@ -144,13 +200,11 @@ pipeline {
                               service_account_email = module.sa.email
                             }
 EOF
-                            """
+                                """
+                            }
                             
-                            // Show the generated main.tf for debugging
-                            sh "echo '=== Generated main.tf ===' && head -50 main.tf"
-                            
-                            // Show module source paths
-                            sh "grep 'source =' main.tf"
+                            // Show the generated main.tf
+                            sh "echo '=== Generated main.tf ===' && cat main.tf"
                             
                             // Initialize terraform
                             sh "terraform init -backend-config=${params.ENVIRONMENT}.tfbackend -reconfigure"
