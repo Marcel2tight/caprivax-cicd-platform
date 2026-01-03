@@ -35,7 +35,7 @@ pipeline {
             steps {
                 withCredentials([file(credentialsId: 'gcp-dev-sa-key', variable: 'GOOGLE_APPLICATION_CREDENTIALS')]) {
                     script {
-                        // Jenkins provides ${WORKSPACE} as the root directory of your repo
+                        // Jenkins provides ${WORKSPACE} as the absolute root directory of your repo
                         def modulesPath = "${env.WORKSPACE}/modules"
                         
                         dir(TF_PATH) {
@@ -120,6 +120,7 @@ EOF
             steps {
                 withCredentials([file(credentialsId: 'gcp-dev-sa-key', variable: 'GOOGLE_APPLICATION_CREDENTIALS')]) {
                     script {
+                        // Approval Gate for Staging and Production
                         if (params.ENVIRONMENT == 'staging' || params.ENVIRONMENT == 'prod') {
                             input message: "Approve deployment to ${params.ENVIRONMENT}?", ok: "Yes, Deploy"
                         }
