@@ -15,7 +15,7 @@ pipeline {
     stages {
         stage('Checkout & Sync') {
             steps {
-                checkout scm  // Explicit checkout is needed
+                checkout scm
                 script {
                     if (params.ROLLBACK_COMMIT != '') {
                         sh "git checkout ${params.ROLLBACK_COMMIT}"
@@ -24,16 +24,20 @@ pipeline {
                         env.GIT_AUTHOR = sh(script: "git log -1 --pretty=format:'%an'", returnStdout: true).trim()
                     }
                     
-                    // DEBUG: Print workspace structure
+                    // DEBUG: Print complete workspace structure
                     sh """
+                        echo "=== WORKSPACE STRUCTURE DEBUG ==="
                         echo "Workspace: ${env.WORKSPACE}"
                         echo "Current directory:"
                         pwd
-                        echo "Directory structure:"
-                        find . -type f -name "*.tf" | head -20
-                        echo "Modules directory check:"
-                        ls -la modules/ || echo "No modules directory at root"
-                        ls -la jenkins-infrastructure/modules/ || echo "No jenkins-infrastructure/modules directory"
+                        echo "Listing all directories:"
+                        find . -type d -name "modules" | head -10
+                        echo "Looking for module directories:"
+                        find . -type d -name "networking" -o -name "service-accounts" -o -name "jenkins-controller" -o -name "monitoring-stack" | head -20
+                        echo "Checking specific paths:"
+                        ls -la modules/ 2>/dev/null || echo "No modules/ at root"
+                        ls -la jenkins-infrastructure/ 2>/dev/null || echo "No jenkins-infrastructure/ directory"
+                        ls -la jenkins-infrastructure/modules/ 2>/dev/null || echo "No jenkins-infrastructure/modules/"
                     """
                 }
             }
@@ -43,17 +47,46 @@ pipeline {
             steps {
                 withCredentials([file(credentialsId: 'gcp-dev-sa-key', variable: 'GOOGLE_APPLICATION_CREDENTIALS')]) {
                     script {
-                        // Determine the correct modules path
-                        def modulesPath = "${env.WORKSPACE}/modules"
+                        // First, find where modules actually are
+                        def modulesDir = sh(script: """
+                            # Look for modules directory
+                            if [ -d "modules" ]; then
+                                echo "${env.WORKSPACE}/modules"
+                            elif [ -d "jenkins-infrastructure/modules" ]; then
+                                echo "${env.WORKSPACE}/jenkins-infrastructure/modules"
+                            elif [ -d "infrastructure/modules" ]; then
+                                echo "${env.WORKSPACE}/infrastructure/modules"
+                            else
+                                # Try to find any modules directory
+                                find "${env.WORKSPACE}" -type d -name "modules" | head -1
+                            fi
+                        """, returnStdout: true).trim()
                         
-                        // Check if modules exist at jenkins-infrastructure/modules instead
-                        if (fileExists("jenkins-infrastructure/modules")) {
-                            modulesPath = "${env.WORKSPACE}/jenkins-infrastructure/modules"
+                        if (!modulesDir) {
+                            error "❌ No modules directory found in the repository!"
                         }
                         
-                        echo "--- 🛠️ Using modules path: ${modulesPath} ---"
+                        echo "✅ Found modules at: ${modulesDir}"
+                        
+                        // Verify each module exists
+                        def requiredModules = ['networking', 'service-accounts', 'jenkins-controller', 'monitoring-stack']
+                        requiredModules.each { module ->
+                            def modulePath = "${modulesDir}/${module}"
+                            if (!fileExists(modulePath)) {
+                                echo "⚠️ Warning: Module ${module} not found at ${modulePath}"
+                                // Try to find it anywhere
+                                def foundPath = sh(script: "find ${env.WORKSPACE} -type d -name '${module}' | head -1", returnStdout: true).trim()
+                                if (foundPath) {
+                                    echo "   Found at alternative location: ${foundPath}"
+                                }
+                            } else {
+                                echo "✓ Module ${module} found at ${modulePath}"
+                            }
+                        }
                         
                         dir(TF_PATH) {
+                            echo "--- 🛠️ Generating main.tf with modules from: ${modulesDir} ---"
+                            
                             sh """
                             cat <<'EOF' > main.tf
                             terraform {
@@ -70,7 +103,7 @@ pipeline {
                             }
 
                             module "net" {
-                              source             = "${modulesPath}/networking"
+                              source             = "${modulesDir}/networking"
                               project_id         = var.project_id
                               naming_prefix      = "capx-${params.ENVIRONMENT}"
                               region             = var.region
@@ -81,14 +114,14 @@ pipeline {
                             }
 
                             module "sa" {
-                              source             = "${modulesPath}/service-accounts"
+                              source             = "${modulesDir}/service-accounts"
                               project_id         = var.project_id
                               environment        = "${params.ENVIRONMENT}"
                               service_account_id = "capx-${params.ENVIRONMENT}-sa"
                             }
 
                             module "jenkins" {
-                              source                = "${modulesPath}/jenkins-controller"
+                              source                = "${modulesDir}/jenkins-controller"
                               project_id            = var.project_id
                               naming_prefix         = "capx-${params.ENVIRONMENT}"
                               zone                  = "\${var.region}-b"
@@ -101,7 +134,7 @@ pipeline {
                             }
 
                             module "mon" {
-                              source                = "${modulesPath}/monitoring-stack"
+                              source                = "${modulesDir}/monitoring-stack"
                               project_id            = var.project_id
                               naming_prefix         = "capx-${params.ENVIRONMENT}"
                               zone                  = "\${var.region}-b"
@@ -113,8 +146,11 @@ pipeline {
 EOF
                             """
                             
-                            // Verify the generated main.tf
-                            sh "cat main.tf"
+                            // Show the generated main.tf for debugging
+                            sh "echo '=== Generated main.tf ===' && head -50 main.tf"
+                            
+                            // Show module source paths
+                            sh "grep 'source =' main.tf"
                             
                             // Initialize terraform
                             sh "terraform init -backend-config=${params.ENVIRONMENT}.tfbackend -reconfigure"
@@ -153,6 +189,12 @@ EOF
     }
 
     post {
+        always {
+            // Clean up
+            dir(TF_PATH) {
+                sh "rm -f tfplan 2>/dev/null || true"
+            }
+        }
         success {
             slackSend(channel: env.SLACK_CHANNEL, color: 'good', 
                 message: "✅ *Success*: ${params.ENVIRONMENT.toUpperCase()} updated by *${env.GIT_AUTHOR}*.\n*Build*: ${env.BUILD_URL}")
