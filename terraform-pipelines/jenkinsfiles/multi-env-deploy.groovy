@@ -18,14 +18,12 @@ pipeline {
         stage('Checkout & Rollback Sync') {
             steps {
                 script {
-                    // Check if a specific rollback version was requested
                     if (params.ROLLBACK_COMMIT != '') {
                         echo "⚠️ Initiating Rollback to: ${params.ROLLBACK_COMMIT}"
                         sh "git checkout ${params.ROLLBACK_COMMIT}"
                         env.GIT_AUTHOR = "Rollback System"
                         env.GIT_SUBJECT = "Reverting to stable version ${params.ROLLBACK_COMMIT}"
                     } else {
-                        // Capture Git details for the Slack notification
                         env.GIT_AUTHOR = sh(script: "git log -1 --pretty=format:'%an'", returnStdout: true).trim()
                         env.GIT_SUBJECT = sh(script: "git log -1 --pretty=format:'%s'", returnStdout: true).trim()
                     }
@@ -37,15 +35,13 @@ pipeline {
             steps {
                 withCredentials([file(credentialsId: 'gcp-dev-sa-key', variable: 'GOOGLE_APPLICATION_CREDENTIALS')]) {
                     script {
-                        // Dynamically find the absolute path to the modules directory to fix lstat errors
-                        def rootDir = sh(script: 'pwd', returnStdout: true).trim().split('/jenkins-infrastructure')[0]
-                        def modulesPath = "${rootDir}/modules"
+                        // Jenkins provides ${WORKSPACE} as the root directory of your repo
+                        def modulesPath = "${env.WORKSPACE}/modules"
                         
                         dir(TF_PATH) {
                             echo "--- 🛠️ Injecting Dynamic main.tf ---"
                             echo "Modules path detected as: ${modulesPath}"
                             
-                            // Using double quotes for the outer sh string so we can inject the modulesPath variable
                             sh """
                             cat <<'EOF' > main.tf
                             terraform {
@@ -124,7 +120,6 @@ EOF
             steps {
                 withCredentials([file(credentialsId: 'gcp-dev-sa-key', variable: 'GOOGLE_APPLICATION_CREDENTIALS')]) {
                     script {
-                        // The Approval Gate for Staging/Prod
                         if (params.ENVIRONMENT == 'staging' || params.ENVIRONMENT == 'prod') {
                             input message: "Approve deployment to ${params.ENVIRONMENT}?", ok: "Yes, Deploy"
                         }
@@ -143,12 +138,10 @@ EOF
             dir(TF_PATH) { sh "rm -f tfplan" }
         }
         success {
-            // Slack success notification with Author and Change details
             slackSend(channel: env.SLACK_CHANNEL, color: 'good', 
                 message: "✅ *Success*: ${params.ENVIRONMENT.toUpperCase()} updated by *${env.GIT_AUTHOR}*.\n*Change*: ${env.GIT_SUBJECT}\n*Build*: ${env.BUILD_URL}")
         }
         failure {
-            // Slack failure notification
             slackSend(channel: env.SLACK_CHANNEL, color: 'danger', 
                 message: "❌ *Failure*: ${params.ENVIRONMENT.toUpperCase()} failed for *${env.GIT_AUTHOR}*.\n*Logs*: ${env.BUILD_URL}console")
         }
