@@ -30,10 +30,14 @@ pipeline {
             steps {
                 withCredentials([file(credentialsId: 'gcp-dev-sa-key', variable: 'GOOGLE_APPLICATION_CREDENTIALS')]) {
                     script {
+                        // We use the absolute Jenkins workspace variable to locate modules
+                        def absModulesPath = "${env.WORKSPACE}/jenkins-infrastructure/modules"
+                        
                         dir(TF_PATH) {
-                            echo "--- 🛠️ Patching main.tf for ${params.ENVIRONMENT} ---"
-                            // We use ../../modules because environments are 2 levels deep from the modules folder
-                            sh '''
+                            echo "--- 🛠️ Injecting Dynamic main.tf ---"
+                            echo "Modules absolute path: ${absModulesPath}"
+                            
+                            sh """
                             cat <<'EOF' > main.tf
                             terraform {
                               required_version = ">= 1.5.0"
@@ -49,7 +53,7 @@ pipeline {
                             }
 
                             module "net" {
-                              source             = "../../modules/networking"
+                              source             = "${absModulesPath}/networking"
                               project_id         = var.project_id
                               naming_prefix      = "capx-${params.ENVIRONMENT}"
                               region             = var.region
@@ -60,17 +64,17 @@ pipeline {
                             }
 
                             module "sa" {
-                              source             = "../../modules/service-accounts"
+                              source             = "${absModulesPath}/service-accounts"
                               project_id         = var.project_id
                               environment        = "${params.ENVIRONMENT}"
                               service_account_id = "capx-${params.ENVIRONMENT}-sa"
                             }
 
                             module "jenkins" {
-                              source                = "../../modules/jenkins-controller"
+                              source                = "${absModulesPath}/jenkins-controller"
                               project_id            = var.project_id
                               naming_prefix         = "capx-${params.ENVIRONMENT}"
-                              zone                  = "${var.region}-b"
+                              zone                  = "\${var.region}-b"
                               machine_type          = "e2-standard-2"
                               network_link          = module.net.vpc_link
                               subnetwork_link       = module.net.subnet_link
@@ -80,17 +84,17 @@ pipeline {
                             }
 
                             module "mon" {
-                              source                = "../../modules/monitoring-stack"
+                              source                = "${absModulesPath}/monitoring-stack"
                               project_id            = var.project_id
                               naming_prefix         = "capx-${params.ENVIRONMENT}"
-                              zone                  = "${var.region}-b"
+                              zone                  = "\${var.region}-b"
                               network_link          = module.net.vpc_link
                               subnetwork_link       = module.net.subnet_link
                               jenkins_ip            = module.jenkins.internal_ip
                               service_account_email = module.sa.email
                             }
 EOF
-                            '''
+                            """
                             sh "terraform init -backend-config=${params.ENVIRONMENT}.tfbackend -reconfigure"
                         }
                     }
@@ -112,6 +116,7 @@ EOF
             when { expression { !params.DRY_RUN } }
             steps {
                 script {
+                    // Manual Approval Gate
                     if (params.ENVIRONMENT == 'staging' || params.ENVIRONMENT == 'prod') {
                         input message: "Approve deployment to ${params.ENVIRONMENT}?", ok: "Yes, Deploy"
                     }
