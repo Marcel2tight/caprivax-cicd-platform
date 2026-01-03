@@ -37,7 +37,6 @@ pipeline {
                     script {
                         dir(TF_PATH) {
                             echo "--- 🛠️ Injecting Dynamic main.tf ---"
-                            // Quoted 'EOF' treats all content as literal text to avoid "Bad Substitution"
                             sh '''
                             cat <<'EOF' > main.tf
                             terraform {
@@ -47,14 +46,12 @@ pipeline {
                               }
                               backend "gcs" {}
                             }
-
                             provider "google" {
                               project = var.project_id
                               region  = var.region
                             }
-
                             module "net" {
-                              source             = "../../modules/networking"
+                              source             = "../../../modules/networking"
                               project_id         = var.project_id
                               naming_prefix      = "capx-${params.ENVIRONMENT}"
                               region             = var.region
@@ -63,16 +60,14 @@ pipeline {
                               allowed_web_ranges = ["0.0.0.0/0"]
                               allowed_ssh_ranges = ["35.235.240.0/20"] 
                             }
-
                             module "sa" {
-                              source             = "../../modules/service-accounts"
+                              source             = "../../../modules/service-accounts"
                               project_id         = var.project_id
                               environment        = "${params.ENVIRONMENT}"
                               service_account_id = "capx-${params.ENVIRONMENT}-sa"
                             }
-
                             module "jenkins" {
-                              source                = "../../modules/jenkins-controller"
+                              source                = "../../../modules/jenkins-controller"
                               project_id            = var.project_id
                               naming_prefix         = "capx-${params.ENVIRONMENT}"
                               zone                  = "${var.region}-b"
@@ -83,9 +78,8 @@ pipeline {
                               source_image          = "debian-cloud/debian-11"
                               service_account_email = module.sa.email
                             }
-
                             module "mon" {
-                              source                = "../../modules/monitoring-stack"
+                              source                = "../../../modules/monitoring-stack"
                               project_id            = var.project_id
                               naming_prefix         = "capx-${params.ENVIRONMENT}"
                               zone                  = "${var.region}-b"
@@ -121,11 +115,9 @@ EOF
             steps {
                 withCredentials([file(credentialsId: 'gcp-dev-sa-key', variable: 'GOOGLE_APPLICATION_CREDENTIALS')]) {
                     script {
-                        // The Approval Gate: Active for staging/prod when DRY_RUN is unchecked
                         if (params.ENVIRONMENT == 'staging' || params.ENVIRONMENT == 'prod') {
                             input message: "Approve deployment to ${params.ENVIRONMENT}?", ok: "Yes, Deploy"
                         }
-                        
                         dir(TF_PATH) {
                             def cmd = params.DESTROY ? "apply -destroy" : "apply"
                             sh "terraform ${cmd} -auto-approve tfplan"
