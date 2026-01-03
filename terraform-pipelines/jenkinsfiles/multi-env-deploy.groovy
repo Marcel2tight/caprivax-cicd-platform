@@ -35,10 +35,18 @@ pipeline {
             steps {
                 withCredentials([file(credentialsId: 'gcp-dev-sa-key', variable: 'GOOGLE_APPLICATION_CREDENTIALS')]) {
                     script {
+                        // Dynamically find the modules folder wherever it exists in the workspace
+                        def findModules = sh(script: "find ${WORKSPACE} -type d -name 'modules' | head -n 1", returnStdout: true).trim()
+                        
+                        if (!findModules) {
+                            error "❌ Error: Could not find 'modules' directory anywhere in the workspace!"
+                        }
+                        
+                        echo "✅ Modules directory found at: ${findModules}"
+                        
                         dir(TF_PATH) {
                             echo "--- 🛠️ Injecting Dynamic main.tf ---"
-                            // Using relative paths to find modules 3 levels up from environments
-                            sh '''
+                            sh """
                             cat <<'EOF' > main.tf
                             terraform {
                               required_version = ">= 1.5.0"
@@ -54,7 +62,7 @@ pipeline {
                             }
 
                             module "net" {
-                              source             = "../../../modules/networking"
+                              source             = "${findModules}/networking"
                               project_id         = var.project_id
                               naming_prefix      = "capx-${params.ENVIRONMENT}"
                               region             = var.region
@@ -65,17 +73,17 @@ pipeline {
                             }
 
                             module "sa" {
-                              source             = "../../../modules/service-accounts"
+                              source             = "${findModules}/service-accounts"
                               project_id         = var.project_id
                               environment        = "${params.ENVIRONMENT}"
                               service_account_id = "capx-${params.ENVIRONMENT}-sa"
                             }
 
                             module "jenkins" {
-                              source                = "../../../modules/jenkins-controller"
+                              source                = "${findModules}/jenkins-controller"
                               project_id            = var.project_id
                               naming_prefix         = "capx-${params.ENVIRONMENT}"
-                              zone                  = "${var.region}-b"
+                              zone                  = "\${var.region}-b"
                               machine_type          = "e2-standard-2"
                               network_link          = module.net.vpc_link
                               subnetwork_link       = module.net.subnet_link
@@ -85,17 +93,17 @@ pipeline {
                             }
 
                             module "mon" {
-                              source                = "../../../modules/monitoring-stack"
+                              source                = "${findModules}/monitoring-stack"
                               project_id            = var.project_id
                               naming_prefix         = "capx-${params.ENVIRONMENT}"
-                              zone                  = "${var.region}-b"
+                              zone                  = "\${var.region}-b"
                               network_link          = module.net.vpc_link
                               subnetwork_link       = module.net.subnet_link
                               jenkins_ip            = module.jenkins.internal_ip
                               service_account_email = module.sa.email
                             }
 EOF
-                            '''
+                            """
                             sh "terraform init -backend-config=${params.ENVIRONMENT}.tfbackend -reconfigure"
                         }
                     }
@@ -121,6 +129,7 @@ EOF
             steps {
                 withCredentials([file(credentialsId: 'gcp-dev-sa-key', variable: 'GOOGLE_APPLICATION_CREDENTIALS')]) {
                     script {
+                        // Approval Gate for Staging and Production
                         if (params.ENVIRONMENT == 'staging' || params.ENVIRONMENT == 'prod') {
                             input message: "Approve deployment to ${params.ENVIRONMENT}?", ok: "Yes, Deploy"
                         }
