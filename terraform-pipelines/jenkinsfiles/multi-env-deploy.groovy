@@ -2,31 +2,96 @@ pipeline {
     agent any
 
     parameters {
-        choice(name: 'ENVIRONMENT', choices: ['dev', 'staging', 'prod'], description: 'Select the target environment to deploy')
-        booleanParam(name: 'DRY_RUN', defaultValue: true, description: 'Checked = Runs Terraform Plan only. Uncheck to Apply changes.')
-        booleanParam(name: 'DESTROY', defaultValue: false, description: 'WARNING: This will destroy all infrastructure in the selected environment.')
+        choice(name: 'ENVIRONMENT', choices: ['dev', 'staging', 'prod'], description: 'Select target environment')
+        booleanParam(name: 'DRY_RUN', defaultValue: true, description: 'Checked = Plan only. Uncheck to Apply.')
+        string(name: 'ROLLBACK_COMMIT', defaultValue: '', description: 'Enter Git Commit Hash to rollback (leave empty for latest).')
+        booleanParam(name: 'DESTROY', defaultValue: false, description: 'WARNING: This will destroy the environment.')
     }
 
     environment {
-        // Path to the environment configuration folder
         TF_PATH = "jenkins-infrastructure/environments/${params.ENVIRONMENT}"
-        
-        // Ensure Terraform runs in non-interactive mode
         TF_IN_AUTOMATION = 'true'
-        
-        // Matches the ID you created in the Jenkins UI
-        GIT_CREDENTIALS_ID = 'github-deploy-key' 
+        SLACK_CHANNEL = '#deployments'
     }
 
     stages {
-        stage('Initialize') {
+        stage('Checkout & Rollback Sync') {
             steps {
-                // Ensure GCP credentials are available for backend initialization
+                script {
+                    // Check if a specific rollback version was requested
+                    if (params.ROLLBACK_COMMIT != '') {
+                        echo "⚠️ Initiating Rollback to: ${params.ROLLBACK_COMMIT}"
+                        sh "git checkout ${params.ROLLBACK_COMMIT}"
+                        env.GIT_AUTHOR = "Rollback System"
+                        env.GIT_SUBJECT = "Reverting to stable version ${params.ROLLBACK_COMMIT}"
+                    } else {
+                        env.GIT_AUTHOR = sh(script: "git log -1 --pretty=format:'%an'", returnStdout: true).trim()
+                        env.GIT_SUBJECT = sh(script: "git log -1 --pretty=format:'%s'", returnStdout: true).trim()
+                    }
+                }
+            }
+        }
+
+        stage('Initialize & Patch') {
+            steps {
                 withCredentials([file(credentialsId: 'gcp-dev-sa-key', variable: 'GOOGLE_APPLICATION_CREDENTIALS')]) {
                     script {
                         dir(TF_PATH) {
-                            echo "--- 🏗️ Initializing ${params.ENVIRONMENT} Backend ---"
-                            // Added -reconfigure to resolve the "Backend configuration changed" error
+                            echo "--- 🛠️ Injecting Dynamic main.tf ---"
+                            // Fixes 'Unreadable module' errors by ensuring correct relative paths
+                            sh '''
+                            cat <<EOF > main.tf
+                            terraform {
+                              required_version = ">= 1.5.0"
+                              required_providers {
+                                google = { source = "hashicorp/google", version = ">= 5.0" }
+                              }
+                              backend "gcs" {}
+                            }
+                            provider "google" {
+                              project = var.project_id
+                              region  = var.region
+                            }
+                            module "net" {
+                              source             = "../../modules/networking"
+                              project_id         = var.project_id
+                              naming_prefix      = "capx-${params.ENVIRONMENT}"
+                              region             = var.region
+                              subnet_cidr        = "10.20.0.0/24"
+                              environment        = "${params.ENVIRONMENT}"
+                              allowed_web_ranges = ["0.0.0.0/0"]
+                              allowed_ssh_ranges = ["35.235.240.0/20"] 
+                            }
+                            module "sa" {
+                              source             = "../../modules/service-accounts"
+                              project_id         = var.project_id
+                              environment        = "${params.ENVIRONMENT}"
+                              service_account_id = "capx-${params.ENVIRONMENT}-sa"
+                            }
+                            module "jenkins" {
+                              source                = "../../modules/jenkins-controller"
+                              project_id            = var.project_id
+                              naming_prefix         = "capx-${params.ENVIRONMENT}"
+                              zone                  = "\\${var.region}-b"
+                              machine_type          = "e2-standard-2"
+                              network_link          = module.net.vpc_link
+                              subnetwork_link       = module.net.subnet_link
+                              public_ip             = true
+                              source_image          = "debian-cloud/debian-11"
+                              service_account_email = module.sa.email
+                            }
+                            module "mon" {
+                              source                = "../../modules/monitoring-stack"
+                              project_id            = var.project_id
+                              naming_prefix         = "capx-${params.ENVIRONMENT}"
+                              zone                  = "\\${var.region}-b"
+                              network_link          = module.net.vpc_link
+                              subnetwork_link       = module.net.subnet_link
+                              jenkins_ip            = module.jenkins.internal_ip
+                              service_account_email = module.sa.email
+                            }
+EOF
+                            '''
                             sh "terraform init -backend-config=${params.ENVIRONMENT}.tfbackend -reconfigure"
                         }
                     }
@@ -37,34 +102,26 @@ pipeline {
         stage('Plan') {
             steps {
                 withCredentials([file(credentialsId: 'gcp-dev-sa-key', variable: 'GOOGLE_APPLICATION_CREDENTIALS')]) {
-                    script {
-                        dir(TF_PATH) {
-                            def varFile = "${params.ENVIRONMENT}.auto.tfvars"
+                    dir(TF_PATH) {
+                        script {
                             def cmd = params.DESTROY ? "plan -destroy" : "plan"
-                            
-                            echo "--- 🔍 Running Terraform ${cmd.toUpperCase()} for ${params.ENVIRONMENT} ---"
-                            sh "terraform ${cmd} -var-file=${varFile} -out=tfplan"
+                            sh "terraform ${cmd} -var-file=${params.ENVIRONMENT}.auto.tfvars -out=tfplan"
                         }
                     }
                 }
             }
         }
 
-        stage('Deploy') {
-            when { 
-                expression { !params.DRY_RUN } 
-            }
+        stage('Apply/Rollback') {
+            when { expression { !params.DRY_RUN } }
             steps {
                 withCredentials([file(credentialsId: 'gcp-dev-sa-key', variable: 'GOOGLE_APPLICATION_CREDENTIALS')]) {
                     script {
-                        // Manual Approval Gate for Staging and Prod
                         if (params.ENVIRONMENT == 'staging' || params.ENVIRONMENT == 'prod') {
-                            input message: "Approve deployment to ${params.ENVIRONMENT}?", ok: "Yes, Deploy"
+                            input message: "Approve deployment/rollback to ${params.ENVIRONMENT}?", ok: "Proceed"
                         }
-                        
                         dir(TF_PATH) {
                             def cmd = params.DESTROY ? "apply -destroy" : "apply"
-                            echo "--- 🚀 Applying Terraform to ${params.ENVIRONMENT} ---"
                             sh "terraform ${cmd} -auto-approve tfplan"
                         }
                     }
@@ -74,11 +131,16 @@ pipeline {
     }
 
     post {
+        always {
+            dir(TF_PATH) { sh "rm -f tfplan" }
+        }
         success {
-            echo "✅ Deployment to ${params.ENVIRONMENT} successful!"
+            slackSend(channel: env.SLACK_CHANNEL, color: 'good', 
+                message: "✅ *Success*: ${params.ENVIRONMENT.toUpperCase()} environment updated by *${env.GIT_AUTHOR}*.\n*Change*: ${env.GIT_SUBJECT}\n*Build URL*: ${env.BUILD_URL}")
         }
         failure {
-            echo "❌ Deployment to ${params.ENVIRONMENT} failed. Check the logs above."
+            slackSend(channel: env.SLACK_CHANNEL, color: 'danger', 
+                message: "❌ *Failure*: ${params.ENVIRONMENT.toUpperCase()} deployment failed for *${env.GIT_AUTHOR}*.\n*Logs*: ${env.BUILD_URL}console")
         }
     }
 }
