@@ -18,12 +18,14 @@ pipeline {
         stage('Checkout & Rollback Sync') {
             steps {
                 script {
+                    // Check if a specific rollback version was requested
                     if (params.ROLLBACK_COMMIT != '') {
                         echo "⚠️ Initiating Rollback to: ${params.ROLLBACK_COMMIT}"
                         sh "git checkout ${params.ROLLBACK_COMMIT}"
                         env.GIT_AUTHOR = "Rollback System"
                         env.GIT_SUBJECT = "Reverting to stable version ${params.ROLLBACK_COMMIT}"
                     } else {
+                        // Capture Git details for the Slack notification
                         env.GIT_AUTHOR = sh(script: "git log -1 --pretty=format:'%an'", returnStdout: true).trim()
                         env.GIT_SUBJECT = sh(script: "git log -1 --pretty=format:'%s'", returnStdout: true).trim()
                     }
@@ -35,9 +37,16 @@ pipeline {
             steps {
                 withCredentials([file(credentialsId: 'gcp-dev-sa-key', variable: 'GOOGLE_APPLICATION_CREDENTIALS')]) {
                     script {
+                        // Dynamically find the absolute path to the modules directory to fix lstat errors
+                        def rootDir = sh(script: 'pwd', returnStdout: true).trim().split('/jenkins-infrastructure')[0]
+                        def modulesPath = "${rootDir}/modules"
+                        
                         dir(TF_PATH) {
                             echo "--- 🛠️ Injecting Dynamic main.tf ---"
-                            sh '''
+                            echo "Modules path detected as: ${modulesPath}"
+                            
+                            // Using double quotes for the outer sh string so we can inject the modulesPath variable
+                            sh """
                             cat <<'EOF' > main.tf
                             terraform {
                               required_version = ">= 1.5.0"
@@ -51,7 +60,7 @@ pipeline {
                               region  = var.region
                             }
                             module "net" {
-                              source             = "../../../modules/networking"
+                              source             = "${modulesPath}/networking"
                               project_id         = var.project_id
                               naming_prefix      = "capx-${params.ENVIRONMENT}"
                               region             = var.region
@@ -61,16 +70,16 @@ pipeline {
                               allowed_ssh_ranges = ["35.235.240.0/20"] 
                             }
                             module "sa" {
-                              source             = "../../../modules/service-accounts"
+                              source             = "${modulesPath}/service-accounts"
                               project_id         = var.project_id
                               environment        = "${params.ENVIRONMENT}"
                               service_account_id = "capx-${params.ENVIRONMENT}-sa"
                             }
                             module "jenkins" {
-                              source                = "../../../modules/jenkins-controller"
+                              source                = "${modulesPath}/jenkins-controller"
                               project_id            = var.project_id
                               naming_prefix         = "capx-${params.ENVIRONMENT}"
-                              zone                  = "${var.region}-b"
+                              zone                  = "\${var.region}-b"
                               machine_type          = "e2-standard-2"
                               network_link          = module.net.vpc_link
                               subnetwork_link       = module.net.subnet_link
@@ -79,17 +88,17 @@ pipeline {
                               service_account_email = module.sa.email
                             }
                             module "mon" {
-                              source                = "../../../modules/monitoring-stack"
+                              source                = "${modulesPath}/monitoring-stack"
                               project_id            = var.project_id
                               naming_prefix         = "capx-${params.ENVIRONMENT}"
-                              zone                  = "${var.region}-b"
+                              zone                  = "\${var.region}-b"
                               network_link          = module.net.vpc_link
                               subnetwork_link       = module.net.subnet_link
                               jenkins_ip            = module.jenkins.internal_ip
                               service_account_email = module.sa.email
                             }
 EOF
-                            '''
+                            """
                             sh "terraform init -backend-config=${params.ENVIRONMENT}.tfbackend -reconfigure"
                         }
                     }
@@ -115,6 +124,7 @@ EOF
             steps {
                 withCredentials([file(credentialsId: 'gcp-dev-sa-key', variable: 'GOOGLE_APPLICATION_CREDENTIALS')]) {
                     script {
+                        // The Approval Gate for Staging/Prod
                         if (params.ENVIRONMENT == 'staging' || params.ENVIRONMENT == 'prod') {
                             input message: "Approve deployment to ${params.ENVIRONMENT}?", ok: "Yes, Deploy"
                         }
@@ -133,10 +143,12 @@ EOF
             dir(TF_PATH) { sh "rm -f tfplan" }
         }
         success {
+            // Slack success notification with Author and Change details
             slackSend(channel: env.SLACK_CHANNEL, color: 'good', 
                 message: "✅ *Success*: ${params.ENVIRONMENT.toUpperCase()} updated by *${env.GIT_AUTHOR}*.\n*Change*: ${env.GIT_SUBJECT}\n*Build*: ${env.BUILD_URL}")
         }
         failure {
+            // Slack failure notification
             slackSend(channel: env.SLACK_CHANNEL, color: 'danger', 
                 message: "❌ *Failure*: ${params.ENVIRONMENT.toUpperCase()} failed for *${env.GIT_AUTHOR}*.\n*Logs*: ${env.BUILD_URL}console")
         }
