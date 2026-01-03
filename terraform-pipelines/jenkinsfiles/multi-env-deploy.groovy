@@ -15,6 +15,7 @@ pipeline {
     stages {
         stage('Checkout & Sync') {
             steps {
+                checkout scm  // Explicit checkout is needed
                 script {
                     if (params.ROLLBACK_COMMIT != '') {
                         sh "git checkout ${params.ROLLBACK_COMMIT}"
@@ -22,6 +23,18 @@ pipeline {
                     } else {
                         env.GIT_AUTHOR = sh(script: "git log -1 --pretty=format:'%an'", returnStdout: true).trim()
                     }
+                    
+                    // DEBUG: Print workspace structure
+                    sh """
+                        echo "Workspace: ${env.WORKSPACE}"
+                        echo "Current directory:"
+                        pwd
+                        echo "Directory structure:"
+                        find . -type f -name "*.tf" | head -20
+                        echo "Modules directory check:"
+                        ls -la modules/ || echo "No modules directory at root"
+                        ls -la jenkins-infrastructure/modules/ || echo "No jenkins-infrastructure/modules directory"
+                    """
                 }
             }
         }
@@ -30,13 +43,17 @@ pipeline {
             steps {
                 withCredentials([file(credentialsId: 'gcp-dev-sa-key', variable: 'GOOGLE_APPLICATION_CREDENTIALS')]) {
                     script {
-                        // We use the absolute Jenkins workspace variable to locate modules
-                        def absModulesPath = "${env.WORKSPACE}/jenkins-infrastructure/modules"
+                        // Determine the correct modules path
+                        def modulesPath = "${env.WORKSPACE}/modules"
+                        
+                        // Check if modules exist at jenkins-infrastructure/modules instead
+                        if (fileExists("jenkins-infrastructure/modules")) {
+                            modulesPath = "${env.WORKSPACE}/jenkins-infrastructure/modules"
+                        }
+                        
+                        echo "--- 🛠️ Using modules path: ${modulesPath} ---"
                         
                         dir(TF_PATH) {
-                            echo "--- 🛠️ Injecting Dynamic main.tf ---"
-                            echo "Modules absolute path: ${absModulesPath}"
-                            
                             sh """
                             cat <<'EOF' > main.tf
                             terraform {
@@ -53,7 +70,7 @@ pipeline {
                             }
 
                             module "net" {
-                              source             = "${absModulesPath}/networking"
+                              source             = "${modulesPath}/networking"
                               project_id         = var.project_id
                               naming_prefix      = "capx-${params.ENVIRONMENT}"
                               region             = var.region
@@ -64,14 +81,14 @@ pipeline {
                             }
 
                             module "sa" {
-                              source             = "${absModulesPath}/service-accounts"
+                              source             = "${modulesPath}/service-accounts"
                               project_id         = var.project_id
                               environment        = "${params.ENVIRONMENT}"
                               service_account_id = "capx-${params.ENVIRONMENT}-sa"
                             }
 
                             module "jenkins" {
-                              source                = "${absModulesPath}/jenkins-controller"
+                              source                = "${modulesPath}/jenkins-controller"
                               project_id            = var.project_id
                               naming_prefix         = "capx-${params.ENVIRONMENT}"
                               zone                  = "\${var.region}-b"
@@ -84,7 +101,7 @@ pipeline {
                             }
 
                             module "mon" {
-                              source                = "${absModulesPath}/monitoring-stack"
+                              source                = "${modulesPath}/monitoring-stack"
                               project_id            = var.project_id
                               naming_prefix         = "capx-${params.ENVIRONMENT}"
                               zone                  = "\${var.region}-b"
@@ -95,6 +112,11 @@ pipeline {
                             }
 EOF
                             """
+                            
+                            // Verify the generated main.tf
+                            sh "cat main.tf"
+                            
+                            // Initialize terraform
                             sh "terraform init -backend-config=${params.ENVIRONMENT}.tfbackend -reconfigure"
                         }
                     }
