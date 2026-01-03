@@ -66,10 +66,11 @@ Secrets: Grafana admin passwords and sensitive credentials are dynamically gener
 
 Network: Production workloads are isolated from the public internet, requiring IAP for administrative access.
 
-## 👤 Author
-**Marcel Owhonda** - *Cloud & DevOps Engineer*
-- **GitHub:** [@Marcel2tight](https://github.com/Marcel2tight)
-- **LinkedIn:** [Marcel Owhonda](https://www.linkedin.com/in/marcel-owhonda-devops)
+
+👤 Author
+Marcel Owhonda - Cloud & DevOps Engineer
+- GitHub: [@Marcel2tight](https://github.com/Marcel2tight)
+- LinkedIn: [Marcel Owhonda](https://www.linkedin.com/in/marcel-owhonda-devops)
 
 ---
 *This project was built as a capstone for demonstrating advanced expertise in GCP Cloud Engineering and DevOps Automation.*
