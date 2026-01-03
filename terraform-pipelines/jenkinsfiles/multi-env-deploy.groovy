@@ -11,14 +11,13 @@ pipeline {
     environment {
         TF_PATH = "jenkins-infrastructure/environments/${params.ENVIRONMENT}"
         TF_IN_AUTOMATION = 'true'
-        SLACK_CHANNEL = '#deployments'
+        SLACK_CHANNEL = '#deployments' 
     }
 
     stages {
         stage('Checkout & Rollback Sync') {
             steps {
                 script {
-                    // Check if a specific rollback version was requested
                     if (params.ROLLBACK_COMMIT != '') {
                         echo "⚠️ Initiating Rollback to: ${params.ROLLBACK_COMMIT}"
                         sh "git checkout ${params.ROLLBACK_COMMIT}"
@@ -38,9 +37,9 @@ pipeline {
                     script {
                         dir(TF_PATH) {
                             echo "--- 🛠️ Injecting Dynamic main.tf ---"
-                            // Fixes 'Unreadable module' errors by ensuring correct relative paths
+                            // Using <<'EOF' (quoted) to prevent "Bad Substitution" errors
                             sh '''
-                            cat <<EOF > main.tf
+                            cat <<'EOF' > main.tf
                             terraform {
                               required_version = ">= 1.5.0"
                               required_providers {
@@ -48,10 +47,12 @@ pipeline {
                               }
                               backend "gcs" {}
                             }
+
                             provider "google" {
                               project = var.project_id
                               region  = var.region
                             }
+
                             module "net" {
                               source             = "../../modules/networking"
                               project_id         = var.project_id
@@ -62,17 +63,19 @@ pipeline {
                               allowed_web_ranges = ["0.0.0.0/0"]
                               allowed_ssh_ranges = ["35.235.240.0/20"] 
                             }
+
                             module "sa" {
                               source             = "../../modules/service-accounts"
                               project_id         = var.project_id
                               environment        = "${params.ENVIRONMENT}"
                               service_account_id = "capx-${params.ENVIRONMENT}-sa"
                             }
+
                             module "jenkins" {
                               source                = "../../modules/jenkins-controller"
                               project_id            = var.project_id
                               naming_prefix         = "capx-${params.ENVIRONMENT}"
-                              zone                  = "\\${var.region}-b"
+                              zone                  = "${var.region}-b"
                               machine_type          = "e2-standard-2"
                               network_link          = module.net.vpc_link
                               subnetwork_link       = module.net.subnet_link
@@ -80,11 +83,12 @@ pipeline {
                               source_image          = "debian-cloud/debian-11"
                               service_account_email = module.sa.email
                             }
+
                             module "mon" {
                               source                = "../../modules/monitoring-stack"
                               project_id            = var.project_id
                               naming_prefix         = "capx-${params.ENVIRONMENT}"
-                              zone                  = "\\${var.region}-b"
+                              zone                  = "${var.region}-b"
                               network_link          = module.net.vpc_link
                               subnetwork_link       = module.net.subnet_link
                               jenkins_ip            = module.jenkins.internal_ip
@@ -113,15 +117,20 @@ EOF
         }
 
         stage('Apply/Rollback') {
-            when { expression { !params.DRY_RUN } }
+            when { 
+                expression { !params.DRY_RUN } 
+            }
             steps {
                 withCredentials([file(credentialsId: 'gcp-dev-sa-key', variable: 'GOOGLE_APPLICATION_CREDENTIALS')]) {
                     script {
+                        // Approval gate for Staging and Production
                         if (params.ENVIRONMENT == 'staging' || params.ENVIRONMENT == 'prod') {
-                            input message: "Approve deployment/rollback to ${params.ENVIRONMENT}?", ok: "Proceed"
+                            input message: "Approve deployment to ${params.ENVIRONMENT}?", ok: "Yes, Deploy"
                         }
+                        
                         dir(TF_PATH) {
                             def cmd = params.DESTROY ? "apply -destroy" : "apply"
+                            echo "--- 🚀 Applying Terraform to ${params.ENVIRONMENT} ---"
                             sh "terraform ${cmd} -auto-approve tfplan"
                         }
                     }
@@ -136,11 +145,11 @@ EOF
         }
         success {
             slackSend(channel: env.SLACK_CHANNEL, color: 'good', 
-                message: "✅ *Success*: ${params.ENVIRONMENT.toUpperCase()} environment updated by *${env.GIT_AUTHOR}*.\n*Change*: ${env.GIT_SUBJECT}\n*Build URL*: ${env.BUILD_URL}")
+                message: "✅ *Success*: ${params.ENVIRONMENT.toUpperCase()} updated by *${env.GIT_AUTHOR}*.\n*Change*: ${env.GIT_SUBJECT}\n*Build*: ${env.BUILD_URL}")
         }
         failure {
             slackSend(channel: env.SLACK_CHANNEL, color: 'danger', 
-                message: "❌ *Failure*: ${params.ENVIRONMENT.toUpperCase()} deployment failed for *${env.GIT_AUTHOR}*.\n*Logs*: ${env.BUILD_URL}console")
+                message: "❌ *Failure*: ${params.ENVIRONMENT.toUpperCase()} failed for *${env.GIT_AUTHOR}*.\n*Logs*: ${env.BUILD_URL}console")
         }
     }
 }
