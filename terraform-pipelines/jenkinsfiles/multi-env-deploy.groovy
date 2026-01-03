@@ -23,16 +23,6 @@ pipeline {
                     } else {
                         env.GIT_AUTHOR = sh(script: "git log -1 --pretty=format:'%an'", returnStdout: true).trim()
                     }
-                    
-                    // Debug: Show repository structure
-                    sh '''
-                        echo "=== REPOSITORY STRUCTURE ==="
-                        echo "Looking for Terraform files..."
-                        find . -name "*.tf" -type f | head -20
-                        echo ""
-                        echo "Looking for module directories..."
-                        find . -type d -name "*module*" -o -name "*jenkins*" -o -name "*networking*" | head -20
-                    '''
                 }
             }
         }
@@ -41,14 +31,77 @@ pipeline {
             steps {
                 withCredentials([file(credentialsId: 'gcp-dev-sa-key', variable: 'GOOGLE_APPLICATION_CREDENTIALS')]) {
                     script {
-                        // Create simple placeholder modules
-                        def createSimpleModule = { moduleName ->
-                            def moduleDir = "${env.WORKSPACE}/temp-modules/${moduleName}"
+                        // Create properly structured placeholder modules
+                        def createProperModule = { moduleName, inputs, outputs ->
+                            def moduleDir = "${env.WORKSPACE}/proper-modules/${moduleName}"
                             sh """
                                 mkdir -p "${moduleDir}"
-                                cat > "${moduleDir}/main.tf" << 'PLACEHOLDER_MODULE'
-# Placeholder ${moduleName} module
+                                # Create variables.tf
+                                cat > "${moduleDir}/variables.tf" << 'VARIABLES_TF'
+${inputs}
+VARIABLES_TF
+                                
+                                # Create outputs.tf
+                                cat > "${moduleDir}/outputs.tf" << 'OUTPUTS_TF'
+${outputs}
+OUTPUTS_TF
+                                
+                                # Create main.tf with minimal resources
+                                cat > "${moduleDir}/main.tf" << 'MAIN_TF'
+# ${moduleName} module
+resource "null_resource" "placeholder" {
+  triggers = {
+    project_id = var.project_id
+    timestamp  = timestamp()
+  }
+}
+MAIN_TF
+                            """
+                            return moduleDir
+                        }
+                        
+                        // Define module interfaces based on your usage
+                        def networkingInputs = '''
+variable "project_id" {
+  type = string
+}
 
+variable "naming_prefix" {
+  type = string
+}
+
+variable "region" {
+  type = string
+}
+
+variable "subnet_cidr" {
+  type = string
+}
+
+variable "environment" {
+  type = string
+}
+
+variable "allowed_web_ranges" {
+  type = list(string)
+}
+
+variable "allowed_ssh_ranges" {
+  type = list(string)
+}
+'''
+                        
+                        def networkingOutputs = '''
+output "vpc_link" {
+  value = "projects/${var.project_id}/global/networks/${var.naming_prefix}-vpc"
+}
+
+output "subnet_link" {
+  value = "projects/${var.project_id}/regions/${var.region}/subnetworks/${var.naming_prefix}-subnet"
+}
+'''
+                        
+                        def serviceAccountsInputs = '''
 variable "project_id" {
   type = string
 }
@@ -57,49 +110,106 @@ variable "environment" {
   type = string
 }
 
-variable "region" {
-  type    = string
-  default = "us-central1"
+variable "service_account_id" {
+  type = string
 }
-
-# Simple outputs to allow dependency chain
-output "vpc_link" {
-  value = "projects/\${var.project_id}/global/networks/\${var.environment}-vpc"
-}
-
-output "subnet_link" {
-  value = "projects/\${var.project_id}/regions/\${var.region}/subnetworks/\${var.environment}-subnet"
-}
-
+'''
+                        
+                        def serviceAccountsOutputs = '''
 output "email" {
-  value = "\${var.environment}-sa@\${var.project_id}.iam.gserviceaccount.com"
+  value = "${var.service_account_id}@${var.project_id}.iam.gserviceaccount.com"
+}
+'''
+                        
+                        def jenkinsInputs = '''
+variable "project_id" {
+  type = string
 }
 
+variable "naming_prefix" {
+  type = string
+}
+
+variable "zone" {
+  type = string
+}
+
+variable "machine_type" {
+  type = string
+}
+
+variable "network_link" {
+  type = string
+}
+
+variable "subnetwork_link" {
+  type = string
+}
+
+variable "public_ip" {
+  type = bool
+}
+
+variable "source_image" {
+  type = string
+}
+
+variable "service_account_email" {
+  type = string
+}
+
+variable "environment" {
+  type = string
+}
+'''
+                        
+                        def jenkinsOutputs = '''
 output "internal_ip" {
   value = "10.20.0.10"
 }
-PLACEHOLDER_MODULE
-                            """
-                            return moduleDir
-                        }
+'''
                         
-                        // Try to find existing modules or create placeholders
-                        def modulePaths = [:]
-                        def moduleNames = ['networking', 'service-accounts', 'jenkins-controller', 'monitoring-stack']
+                        def monitoringInputs = '''
+variable "project_id" {
+  type = string
+}
+
+variable "naming_prefix" {
+  type = string
+}
+
+variable "zone" {
+  type = string
+}
+
+variable "network_link" {
+  type = string
+}
+
+variable "subnetwork_link" {
+  type = string
+}
+
+variable "jenkins_ip" {
+  type = string
+}
+
+variable "service_account_email" {
+  type = string
+}
+'''
                         
-                        moduleNames.each { moduleName ->
-                            def foundPath = sh(script: """
-                                find "${env.WORKSPACE}" -type d -name "${moduleName}" | grep -v temp-modules | head -1
-                            """, returnStdout: true).trim()
-                            
-                            if (foundPath) {
-                                echo "Found ${moduleName} at: ${foundPath}"
-                                modulePaths[moduleName] = foundPath
-                            } else {
-                                echo "Creating placeholder for ${moduleName}"
-                                modulePaths[moduleName] = createSimpleModule(moduleName)
-                            }
-                        }
+                        def monitoringOutputs = '''
+output "monitoring_setup" {
+  value = "Monitoring placeholder"
+}
+'''
+                        
+                        // Create proper modules
+                        def networkingModulePath = createProperModule("networking", networkingInputs, networkingOutputs)
+                        def saModulePath = createProperModule("service-accounts", serviceAccountsInputs, serviceAccountsOutputs)
+                        def jenkinsModulePath = createProperModule("jenkins-controller", jenkinsInputs, jenkinsOutputs)
+                        def monitoringModulePath = createProperModule("monitoring-stack", monitoringInputs, monitoringOutputs)
                         
                         dir(TF_PATH) {
                             // Create or verify variables file
@@ -108,17 +218,19 @@ PLACEHOLDER_MODULE
                                     echo 'project_id = "caprivax-stging-platform-infra"' > "${params.ENVIRONMENT}.auto.tfvars"
                                     echo 'region = "us-central1"' >> "${params.ENVIRONMENT}.auto.tfvars"
                                 fi
-                                echo "Using variables from ${params.ENVIRONMENT}.auto.tfvars:"
-                                cat "${params.ENVIRONMENT}.auto.tfvars"
                             """
                             
-                            // Create main.tf with proper escaping
+                            // Create main.tf with correct module calls
                             writeFile file: 'main.tf', text: """terraform {
   required_version = ">= 1.5.0"
   required_providers {
     google = { 
       source = "hashicorp/google" 
       version = ">= 5.0" 
+    }
+    null = {
+      source = "hashicorp/null"
+      version = ">= 3.0"
     }
   }
   backend "gcs" {
@@ -145,8 +257,10 @@ provider "google" {
   region  = var.region
 }
 
+provider "null" {}
+
 module "net" {
-  source             = "${modulePaths['networking']}"
+  source             = "${networkingModulePath}"
   project_id         = var.project_id
   naming_prefix      = "capx-${params.ENVIRONMENT}"
   region             = var.region
@@ -157,14 +271,14 @@ module "net" {
 }
 
 module "sa" {
-  source             = "${modulePaths['service-accounts']}"
+  source             = "${saModulePath}"
   project_id         = var.project_id
   environment        = "${params.ENVIRONMENT}"
   service_account_id = "capx-${params.ENVIRONMENT}-sa"
 }
 
 module "jenkins" {
-  source                = "${modulePaths['jenkins-controller']}"
+  source                = "${jenkinsModulePath}"
   project_id            = var.project_id
   naming_prefix         = "capx-${params.ENVIRONMENT}"
   zone                  = "\${var.region}-b"
@@ -174,10 +288,11 @@ module "jenkins" {
   public_ip             = true
   source_image          = "debian-cloud/debian-11"
   service_account_email = module.sa.email
+  environment           = "${params.ENVIRONMENT}"
 }
 
 module "mon" {
-  source                = "${modulePaths['monitoring-stack']}"
+  source                = "${monitoringModulePath}"
   project_id            = var.project_id
   naming_prefix         = "capx-${params.ENVIRONMENT}"
   zone                  = "\${var.region}-b"
@@ -188,14 +303,15 @@ module "mon" {
 }
 """
                             
-                            // Show generated file
-                            sh '''
-                                echo "=== Generated main.tf (first 40 lines) ==="
-                                head -40 main.tf
+                            // Show module structure
+                            sh """
+                                echo "=== Checking module structure ==="
+                                echo "Networking module:"
+                                ls -la "${networkingModulePath}/"
                                 echo ""
-                                echo "=== Module source paths ==="
-                                grep "source =" main.tf
-                            '''
+                                echo "Jenkins module variables:"
+                                cat "${jenkinsModulePath}/variables.tf"
+                            """
                             
                             // Initialize terraform
                             sh """
@@ -244,8 +360,8 @@ module "mon" {
 
     post {
         always {
-            // Clean up temporary modules
-            sh 'rm -rf ${WORKSPACE}/temp-modules 2>/dev/null || true'
+            // Clean up
+            sh 'rm -rf ${WORKSPACE}/proper-modules 2>/dev/null || true'
             dir(TF_PATH) {
                 sh 'rm -f tfplan 2>/dev/null || true'
             }
