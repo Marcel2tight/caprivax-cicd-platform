@@ -18,12 +18,10 @@ pipeline {
                 script {
                     if (params.ROLLBACK_COMMIT != '') {
                         sh "git checkout ${params.ROLLBACK_COMMIT}"
-                        env.GIT_AUTHOR = "Rollback"
+                        env.GIT_AUTHOR = "Rollback System"
                     } else {
                         env.GIT_AUTHOR = sh(script: "git log -1 --pretty=format:'%an'", returnStdout: true).trim()
                     }
-                    // Debug step from your analysis: check where we actually are
-                    sh "pwd && ls -R" 
                 }
             }
         }
@@ -32,13 +30,10 @@ pipeline {
             steps {
                 withCredentials([file(credentialsId: 'gcp-dev-sa-key', variable: 'GOOGLE_APPLICATION_CREDENTIALS')]) {
                     script {
-                        // Use your 'find' strategy to get the absolute path to modules
-                        def modulesDir = sh(script: "find ${WORKSPACE} -type d -name 'modules' | head -n 1", returnStdout: true).trim()
-                        
                         dir(TF_PATH) {
-                            echo "--- 🛠️ Patching Paths for Jenkins Workspace ---"
-                            // Using <<'EOF' to avoid the "Bad Substitution" error you saw earlier
-                            sh """
+                            echo "--- 🛠️ Patching main.tf for ${params.ENVIRONMENT} ---"
+                            // We use ../../modules because environments are 2 levels deep from the modules folder
+                            sh '''
                             cat <<'EOF' > main.tf
                             terraform {
                               required_version = ">= 1.5.0"
@@ -47,50 +42,55 @@ pipeline {
                               }
                               backend "gcs" {}
                             }
+
                             provider "google" {
                               project = var.project_id
                               region  = var.region
                             }
+
                             module "net" {
-                              source = "${modulesDir}/networking"
-                              project_id = var.project_id
-                              naming_prefix = "capx-${params.ENVIRONMENT}"
-                              region = var.region
-                              subnet_cidr = "10.20.0.0/24"
-                              environment = "${params.ENVIRONMENT}"
+                              source             = "../../modules/networking"
+                              project_id         = var.project_id
+                              naming_prefix      = "capx-${params.ENVIRONMENT}"
+                              region             = var.region
+                              subnet_cidr        = "10.20.0.0/24"
+                              environment        = "${params.ENVIRONMENT}"
                               allowed_web_ranges = ["0.0.0.0/0"]
                               allowed_ssh_ranges = ["35.235.240.0/20"] 
                             }
+
                             module "sa" {
-                              source = "${modulesDir}/service-accounts"
-                              project_id = var.project_id
-                              environment = "${params.ENVIRONMENT}"
+                              source             = "../../modules/service-accounts"
+                              project_id         = var.project_id
+                              environment        = "${params.ENVIRONMENT}"
                               service_account_id = "capx-${params.ENVIRONMENT}-sa"
                             }
+
                             module "jenkins" {
-                              source = "${modulesDir}/jenkins-controller"
-                              project_id = var.project_id
-                              naming_prefix = "capx-${params.ENVIRONMENT}"
-                              zone = "\${var.region}-b"
-                              machine_type = "e2-standard-2"
-                              network_link = module.net.vpc_link
-                              subnetwork_link = module.net.subnet_link
-                              public_ip = true
-                              source_image = "debian-cloud/debian-11"
+                              source                = "../../modules/jenkins-controller"
+                              project_id            = var.project_id
+                              naming_prefix         = "capx-${params.ENVIRONMENT}"
+                              zone                  = "${var.region}-b"
+                              machine_type          = "e2-standard-2"
+                              network_link          = module.net.vpc_link
+                              subnetwork_link       = module.net.subnet_link
+                              public_ip             = true
+                              source_image          = "debian-cloud/debian-11"
                               service_account_email = module.sa.email
                             }
+
                             module "mon" {
-                              source = "${modulesDir}/monitoring-stack"
-                              project_id = var.project_id
-                              naming_prefix = "capx-${params.ENVIRONMENT}"
-                              zone = "\${var.region}-b"
-                              network_link = module.net.vpc_link
-                              subnetwork_link = module.net.subnet_link
-                              jenkins_ip = module.jenkins.internal_ip
+                              source                = "../../modules/monitoring-stack"
+                              project_id            = var.project_id
+                              naming_prefix         = "capx-${params.ENVIRONMENT}"
+                              zone                  = "${var.region}-b"
+                              network_link          = module.net.vpc_link
+                              subnetwork_link       = module.net.subnet_link
+                              jenkins_ip            = module.jenkins.internal_ip
                               service_account_email = module.sa.email
                             }
 EOF
-                            """
+                            '''
                             sh "terraform init -backend-config=${params.ENVIRONMENT}.tfbackend -reconfigure"
                         }
                     }
@@ -112,7 +112,6 @@ EOF
             when { expression { !params.DRY_RUN } }
             steps {
                 script {
-                    // Manual Approval Gate for Staging/Prod
                     if (params.ENVIRONMENT == 'staging' || params.ENVIRONMENT == 'prod') {
                         input message: "Approve deployment to ${params.ENVIRONMENT}?", ok: "Yes, Deploy"
                     }
