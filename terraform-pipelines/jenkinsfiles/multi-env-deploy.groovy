@@ -15,18 +15,7 @@ pipeline {
     stages {
         stage('Checkout & Sync') {
             steps {
-                checkout([
-                    $class: 'GitSCM',
-                    branches: [[name: '*/main']],
-                    extensions: [
-                        // Clean before checkout
-                        [$class: 'CleanBeforeCheckout'],
-                        // Clone all branches and tags
-                        [$class: 'CloneOption', depth: 0, noTags: false, reference: '', shallow: false]
-                    ],
-                    userRemoteConfigs: [[url: 'https://github.com/your-org/your-repo.git']]
-                ])
-                
+                checkout scm
                 script {
                     if (params.ROLLBACK_COMMIT != '') {
                         sh "git checkout ${params.ROLLBACK_COMMIT}"
@@ -35,42 +24,23 @@ pipeline {
                         env.GIT_AUTHOR = sh(script: "git log -1 --pretty=format:'%an'", returnStdout: true).trim()
                     }
                     
-                    // DEBUG: Print complete repository structure
-                    sh """
-                        echo "=== FULL REPOSITORY STRUCTURE ==="
-                        echo "Workspace: ${env.WORKSPACE}"
-                        echo "Current directory:"
-                        pwd
-                        echo "Complete tree (first 50 lines):"
-                        find . -type f -name "*.tf" | sort | head -50
-                        echo ""
-                        echo "=== CHECKING MODULES DIRECTORIES ==="
-                        echo "Looking for modules at: ${env.WORKSPACE}/jenkins-infrastructure/modules/"
-                        if [ -d "${env.WORKSPACE}/jenkins-infrastructure/modules/" ]; then
-                            echo "✓ Found jenkins-infrastructure/modules/"
-                            ls -la "${env.WORKSPACE}/jenkins-infrastructure/modules/"
-                        else
-                            echo "✗ NOT FOUND: jenkins-infrastructure/modules/"
-                        fi
-                        echo ""
-                        echo "Looking for modules at: ${env.WORKSPACE}/modules/"
-                        if [ -d "${env.WORKSPACE}/modules/" ]; then
-                            echo "✓ Found modules/"
-                            ls -la "${env.WORKSPACE}/modules/"
-                        else
-                            echo "✗ NOT FOUND: modules/"
-                        fi
-                        echo ""
-                        echo "=== SEARCHING FOR SPECIFIC MODULES ==="
-                        echo "Searching for 'jenkins-controller' directory:"
-                        find . -type d -name "jenkins-controller" 2>/dev/null
-                        echo ""
-                        echo "Searching for 'networking' directory:"
-                        find . -type d -name "networking" 2>/dev/null
-                        echo ""
-                        echo "=== LISTING ALL .tf FILES ==="
-                        find . -type f -name "*.tf" | head -30
-                    """
+                    // Verify the auto.tfvars file
+                    dir(TF_PATH) {
+                        sh """
+                            echo "=== Verifying ${params.ENVIRONMENT}.auto.tfvars ==="
+                            if [ -f "${params.ENVIRONMENT}.auto.tfvars" ]; then
+                                echo "Current content:"
+                                cat "${params.ENVIRONMENT}.auto.tfvars"
+                                echo ""
+                                echo "Project ID from file:"
+                                grep -i "project_id" "${params.ENVIRONMENT}.auto.tfvars"
+                            else
+                                echo "Creating ${params.ENVIRONMENT}.auto.tfvars..."
+                                echo 'project_id = "caprivax-stging-platform-infra"' > "${params.ENVIRONMENT}.auto.tfvars"
+                                echo 'region = "us-central1"' >> "${params.ENVIRONMENT}.auto.tfvars"
+                            fi
+                        """
+                    }
                 }
             }
         }
@@ -79,7 +49,24 @@ pipeline {
             steps {
                 withCredentials([file(credentialsId: 'gcp-dev-sa-key', variable: 'GOOGLE_APPLICATION_CREDENTIALS')]) {
                     script {
-                        // Find the actual module directories
+                        // Test GCP authentication and verify project exists
+                        sh """
+                            echo "=== Testing GCP Authentication ==="
+                            gcloud auth activate-service-account --key-file=\$GOOGLE_APPLICATION_CREDENTIALS
+                            
+                            echo "=== Verifying GCP Project ==="
+                            PROJECT_ID="caprivax-stging-platform-infra"
+                            if gcloud projects describe \$PROJECT_ID >/dev/null 2>&1; then
+                                echo "✓ Project \$PROJECT_ID exists and is accessible"
+                                gcloud config set project \$PROJECT_ID
+                            else
+                                echo "✗ Project \$PROJECT_ID not found or not accessible"
+                                echo "Available projects:"
+                                gcloud projects list --format="value(projectId)" | head -10
+                            fi
+                        """
+                        
+                        // Find module directories
                         def jenkinsModulePath = sh(script: """
                             find "${env.WORKSPACE}" -type d -name "jenkins-controller" | head -1
                         """, returnStdout: true).trim()
@@ -102,31 +89,54 @@ pipeline {
                         echo "- Service Accounts: ${saModulePath}"
                         echo "- Monitoring: ${monitoringModulePath}"
                         
-                        // Get the common parent directory for modules
-                        def modulesDir = sh(script: """
-                            # Find common parent
-                            dirs="${jenkinsModulePath} ${networkingModulePath} ${saModulePath} ${monitoringModulePath}"
-                            echo "\$dirs" | tr ' ' '\\n' | xargs -I {} dirname {} | sort | uniq -c | sort -rn | head -1 | awk '{print \$2}'
-                        """, returnStdout: true).trim()
-                        
-                        if (!modulesDir) {
-                            modulesDir = "${env.WORKSPACE}/modules"
-                        }
-                        
-                        echo "Using modules directory: ${modulesDir}"
-                        
                         dir(TF_PATH) {
                             echo "--- 🛠️ Generating main.tf ---"
                             
-                            // Use the actual found paths for each module
+                            // Ensure the project_id in auto.tfvars is correct
+                            sh """
+                                # Ensure project_id is correct
+                                if grep -q "project_id" "${params.ENVIRONMENT}.auto.tfvars"; then
+                                    sed -i 's/project_id\\s*=.*/project_id = "caprivax-stging-platform-infra"/' "${params.ENVIRONMENT}.auto.tfvars"
+                                else
+                                    echo 'project_id = "caprivax-stging-platform-infra"' >> "${params.ENVIRONMENT}.auto.tfvars"
+                                fi
+                                
+                                # Ensure region is set
+                                if ! grep -q "region" "${params.ENVIRONMENT}.auto.tfvars"; then
+                                    echo 'region = "us-central1"' >> "${params.ENVIRONMENT}.auto.tfvars"
+                                fi
+                                
+                                echo "Final ${params.ENVIRONMENT}.auto.tfvars:"
+                                cat "${params.ENVIRONMENT}.auto.tfvars"
+                            """
+                            
                             sh """
                             cat <<'EOF' > main.tf
                             terraform {
                               required_version = ">= 1.5.0"
                               required_providers {
-                                google = { source = "hashicorp/google", version = ">= 5.0" }
+                                google = { 
+                                  source = "hashicorp/google" 
+                                  version = ">= 5.0" 
+                                }
                               }
-                              backend "gcs" {}
+                              backend "gcs" {
+                                bucket = "terraform-state-caprivax-stging-platform-infra"
+                                prefix = "terraform/state/${params.ENVIRONMENT}"
+                              }
+                            }
+
+                            # Variable declarations
+                            variable "project_id" {
+                              description = "The GCP project ID"
+                              type        = string
+                              default     = "caprivax-stging-platform-infra"
+                            }
+
+                            variable "region" {
+                              description = "The GCP region"
+                              type        = string
+                              default     = "us-central1"
                             }
 
                             provider "google" {
@@ -136,10 +146,11 @@ pipeline {
 EOF
                             """
                             
-                            // Add modules with their actual paths
+                            // Add networking module
                             if (networkingModulePath) {
                                 sh """
                                 cat <<'EOF' >> main.tf
+
                             module "net" {
                               source             = "${networkingModulePath}"
                               project_id         = var.project_id
@@ -152,11 +163,15 @@ EOF
                             }
 EOF
                                 """
+                            } else {
+                                error "❌ Networking module not found!"
                             }
                             
+                            // Add service accounts module
                             if (saModulePath) {
                                 sh """
                                 cat <<'EOF' >> main.tf
+
                             module "sa" {
                               source             = "${saModulePath}"
                               project_id         = var.project_id
@@ -165,11 +180,15 @@ EOF
                             }
 EOF
                                 """
+                            } else {
+                                error "❌ Service Accounts module not found!"
                             }
                             
+                            // Add jenkins module
                             if (jenkinsModulePath) {
                                 sh """
                                 cat <<'EOF' >> main.tf
+
                             module "jenkins" {
                               source                = "${jenkinsModulePath}"
                               project_id            = var.project_id
@@ -184,11 +203,15 @@ EOF
                             }
 EOF
                                 """
+                            } else {
+                                error "❌ Jenkins Controller module not found!"
                             }
                             
+                            // Add monitoring module if exists
                             if (monitoringModulePath) {
                                 sh """
                                 cat <<'EOF' >> main.tf
+
                             module "mon" {
                               source                = "${monitoringModulePath}"
                               project_id            = var.project_id
@@ -201,13 +224,24 @@ EOF
                             }
 EOF
                                 """
+                            } else {
+                                echo "// Monitoring module not included (optional)"
                             }
                             
-                            // Show the generated main.tf
-                            sh "echo '=== Generated main.tf ===' && cat main.tf"
+                            // Show final configuration
+                            sh """
+                                echo "=== Generated main.tf (first 50 lines) ==="
+                                head -50 main.tf
+                                echo ""
+                                echo "=== Module source paths ==="
+                                grep "source =" main.tf
+                            """
                             
                             // Initialize terraform
-                            sh "terraform init -backend-config=${params.ENVIRONMENT}.tfbackend -reconfigure"
+                            sh """
+                                echo "=== Initializing Terraform ==="
+                                terraform init -backend-config=${params.ENVIRONMENT}.tfbackend -reconfigure -input=false
+                            """
                         }
                     }
                 }
@@ -218,7 +252,12 @@ EOF
             steps {
                 withCredentials([file(credentialsId: 'gcp-dev-sa-key', variable: 'GOOGLE_APPLICATION_CREDENTIALS')]) {
                     dir(TF_PATH) {
-                        sh "terraform plan -var-file=${params.ENVIRONMENT}.auto.tfvars -out=tfplan"
+                        sh """
+                            echo "=== Running Terraform Plan ==="
+                            echo "Using variables from: ${params.ENVIRONMENT}.auto.tfvars"
+                            cat ${params.ENVIRONMENT}.auto.tfvars
+                            terraform plan -var-file=${params.ENVIRONMENT}.auto.tfvars -out=tfplan
+                        """
                     }
                 }
             }
@@ -228,13 +267,16 @@ EOF
             when { expression { !params.DRY_RUN } }
             steps {
                 script {
-                    // Manual Approval Gate
+                    // Manual Approval Gate for staging/prod
                     if (params.ENVIRONMENT == 'staging' || params.ENVIRONMENT == 'prod') {
                         input message: "Approve deployment to ${params.ENVIRONMENT}?", ok: "Yes, Deploy"
                     }
                     withCredentials([file(credentialsId: 'gcp-dev-sa-key', variable: 'GOOGLE_APPLICATION_CREDENTIALS')]) {
                         dir(TF_PATH) {
-                            sh "terraform apply -auto-approve tfplan"
+                            sh """
+                                echo "=== Applying Terraform Changes ==="
+                                terraform apply -auto-approve tfplan
+                            """
                         }
                     }
                 }
