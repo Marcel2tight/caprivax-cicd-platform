@@ -37,7 +37,7 @@ pipeline {
                     script {
                         dir(TF_PATH) {
                             echo "--- 🛠️ Injecting Dynamic main.tf ---"
-                            // Using <<'EOF' (quoted) to prevent "Bad Substitution" errors
+                            // Quoted 'EOF' treats all content as literal text to avoid "Bad Substitution"
                             sh '''
                             cat <<'EOF' > main.tf
                             terraform {
@@ -117,20 +117,17 @@ EOF
         }
 
         stage('Apply/Rollback') {
-            when { 
-                expression { !params.DRY_RUN } 
-            }
+            when { expression { !params.DRY_RUN } }
             steps {
                 withCredentials([file(credentialsId: 'gcp-dev-sa-key', variable: 'GOOGLE_APPLICATION_CREDENTIALS')]) {
                     script {
-                        // Approval gate for Staging and Production
+                        // The Approval Gate: Active for staging/prod when DRY_RUN is unchecked
                         if (params.ENVIRONMENT == 'staging' || params.ENVIRONMENT == 'prod') {
                             input message: "Approve deployment to ${params.ENVIRONMENT}?", ok: "Yes, Deploy"
                         }
                         
                         dir(TF_PATH) {
                             def cmd = params.DESTROY ? "apply -destroy" : "apply"
-                            echo "--- 🚀 Applying Terraform to ${params.ENVIRONMENT} ---"
                             sh "terraform ${cmd} -auto-approve tfplan"
                         }
                     }
