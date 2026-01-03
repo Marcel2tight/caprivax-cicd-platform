@@ -35,14 +35,10 @@ pipeline {
             steps {
                 withCredentials([file(credentialsId: 'gcp-dev-sa-key', variable: 'GOOGLE_APPLICATION_CREDENTIALS')]) {
                     script {
-                        // Jenkins provides ${WORKSPACE} as the absolute root directory of your repo
-                        def modulesPath = "${env.WORKSPACE}/modules"
-                        
                         dir(TF_PATH) {
                             echo "--- 🛠️ Injecting Dynamic main.tf ---"
-                            echo "Modules path detected as: ${modulesPath}"
-                            
-                            sh """
+                            // Using relative paths to find modules 3 levels up from environments
+                            sh '''
                             cat <<'EOF' > main.tf
                             terraform {
                               required_version = ">= 1.5.0"
@@ -51,12 +47,14 @@ pipeline {
                               }
                               backend "gcs" {}
                             }
+
                             provider "google" {
                               project = var.project_id
                               region  = var.region
                             }
+
                             module "net" {
-                              source             = "${modulesPath}/networking"
+                              source             = "../../../modules/networking"
                               project_id         = var.project_id
                               naming_prefix      = "capx-${params.ENVIRONMENT}"
                               region             = var.region
@@ -65,17 +63,19 @@ pipeline {
                               allowed_web_ranges = ["0.0.0.0/0"]
                               allowed_ssh_ranges = ["35.235.240.0/20"] 
                             }
+
                             module "sa" {
-                              source             = "${modulesPath}/service-accounts"
+                              source             = "../../../modules/service-accounts"
                               project_id         = var.project_id
                               environment        = "${params.ENVIRONMENT}"
                               service_account_id = "capx-${params.ENVIRONMENT}-sa"
                             }
+
                             module "jenkins" {
-                              source                = "${modulesPath}/jenkins-controller"
+                              source                = "../../../modules/jenkins-controller"
                               project_id            = var.project_id
                               naming_prefix         = "capx-${params.ENVIRONMENT}"
-                              zone                  = "\${var.region}-b"
+                              zone                  = "${var.region}-b"
                               machine_type          = "e2-standard-2"
                               network_link          = module.net.vpc_link
                               subnetwork_link       = module.net.subnet_link
@@ -83,18 +83,19 @@ pipeline {
                               source_image          = "debian-cloud/debian-11"
                               service_account_email = module.sa.email
                             }
+
                             module "mon" {
-                              source                = "${modulesPath}/monitoring-stack"
+                              source                = "../../../modules/monitoring-stack"
                               project_id            = var.project_id
                               naming_prefix         = "capx-${params.ENVIRONMENT}"
-                              zone                  = "\${var.region}-b"
+                              zone                  = "${var.region}-b"
                               network_link          = module.net.vpc_link
                               subnetwork_link       = module.net.subnet_link
                               jenkins_ip            = module.jenkins.internal_ip
                               service_account_email = module.sa.email
                             }
 EOF
-                            """
+                            '''
                             sh "terraform init -backend-config=${params.ENVIRONMENT}.tfbackend -reconfigure"
                         }
                     }
@@ -120,7 +121,6 @@ EOF
             steps {
                 withCredentials([file(credentialsId: 'gcp-dev-sa-key', variable: 'GOOGLE_APPLICATION_CREDENTIALS')]) {
                     script {
-                        // Approval Gate for Staging and Production
                         if (params.ENVIRONMENT == 'staging' || params.ENVIRONMENT == 'prod') {
                             input message: "Approve deployment to ${params.ENVIRONMENT}?", ok: "Yes, Deploy"
                         }
